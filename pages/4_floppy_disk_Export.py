@@ -2,17 +2,18 @@ import streamlit as st
 import utils
 from io import BytesIO
 
-st.title("💾 Export Final Document")
+st.title("💾 Export Final Document (1-16 Format)")
 
+# Check if data exists from Page 3
 if 'final_diary' not in st.session_state:
-    st.warning("No data ready. Please click 'Confirm All' on the Review page.")
+    st.warning("No data ready. Please go to 'Review & Calculate' and click 'Confirm All'.")
     st.stop()
 
-st.success("Data is ready for generation.")
+st.info("Generating the '1 to 16' Column format based on your uploaded CSV structure.")
 
-if st.button("Generate Word Document (A3)"):
-    # Generate the document with all 3 DataFrames
-    doc = utils.create_word_doc(
+if st.button("Generate Final Word Document"):
+    # Call the new complex function
+    doc = utils.create_complex_claim_form(
         st.session_state['final_diary'],
         st.session_state['final_ta'],
         st.session_state['final_da']
@@ -24,8 +25,8 @@ if st.button("Generate Word Document (A3)"):
     buffer.seek(0)
     
     st.download_button(
-        label="⬇️ Download TA_DA_Claim.docx",
+        label="⬇️ Download TA_DA_Bill.docx",
         data=buffer,
-        file_name="TA_DA_Claim_Form.docx",
+        file_name="TA_DA_Claim_Final.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
