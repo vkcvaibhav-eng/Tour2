@@ -8,7 +8,7 @@ import PyPDF2
 from fpdf import FPDF
 
 # --- CONFIGURATION ---
-AI_MODEL_NAME = "gemini-2.0-flash" 
+AI_MODEL_NAME = "gemini-3-flash-preview" 
 
 ST_DATA_DIR = "data_store"
 ST_RULES_DIR = "rules_store"
@@ -134,3 +134,4 @@ with tabs[1]:
             pdf.cell(200, 10, txt="NAU TA/DA Claim", ln=1, align='C')
             pdf.output("TA_Claim.pdf")
             st.success("PDF generated from saved data!")
+
