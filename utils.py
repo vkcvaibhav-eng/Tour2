@@ -65,7 +65,7 @@ def call_gemini_extraction(api_key, files, context_prompt):
     Do not change the station names. Keep them exactly as written in the diary.
     """
     
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    model = genai.GenerativeModel(model_name="gemini-3-flash-preview")
     
     try:
         response = model.generate_content([system_instruction, context_prompt, *uploaded_files])
@@ -130,3 +130,4 @@ def create_word_doc(diary_df, ta_df, da_df):
                 row_cells[i].text = str(item)
 
     return doc
+
