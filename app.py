@@ -5,77 +5,51 @@ import json
 import os
 from PIL import Image
 import PyPDF2
-from fpdf import FPDF
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import datetime
 
 # --- CONFIGURATION ---
-AI_MODEL_NAME = "gemini-3-flash-preview" 
+AI_MODEL_NAME = "gemini-2.0-flash" 
 ST_DATA_DIR = "data_store"
 ST_RULES_DIR = "rules_store"
 os.makedirs(ST_DATA_DIR, exist_ok=True)
 os.makedirs(ST_RULES_DIR, exist_ok=True)
-HISTORY_FILE = os.path.join(ST_DATA_DIR, "nau_claim_history.json")
+HISTORY_FILE = os.path.join(ST_DATA_DIR, "claim_history.json")
 
-st.set_page_config(page_title="NAU TA/DA Assistant", layout="wide", page_icon="🚜")
+st.set_page_config(page_title="NAU TA/DA Claim Assistant", layout="wide", page_icon="🚜")
 
-# --- CSS FOR VISIBILITY ---
-st.markdown("""
-<style>
-    .stTextArea textarea {font-size: 14px;}
-    .reportview-container .main .block-container {max_width: 95%;}
-</style>
-""", unsafe_allow_html=True)
-
-# --- SESSION STATE ---
+# --- SESSION STATE INITIALIZATION ---
 def init_session():
-    # 1. Salary Info
+    # Tour Data: Detailed leg-by-leg travel
+    if "tour_data" not in st.session_state:
+        st.session_state.tour_data = pd.DataFrame(columns=[
+            "Dep_Date", "Dep_Time", "Dep_Place", 
+            "Arr_Date", "Arr_Time", "Arr_Place", 
+            "Mode", "Vehicle_Details", "Distance_KM", 
+            "Ticket_Amount", "Enquiry_Fare", "Remark"
+        ])
+    
+    # Stay Data: Hotel/Guest House details
+    if "stay_data" not in st.session_state:
+        st.session_state.stay_data = pd.DataFrame(columns=[
+            "CheckIn_Date", "CheckIn_Time", 
+            "CheckOut_Date", "CheckOut_Time", 
+            "City", "Stay_Type", "Bill_Amount", "Remark"
+        ])
+    
     if "salary_info" not in st.session_state:
-        st.session_state.salary_info = {"Basic Pay": 0, "Pay Level": "Level 12", "Designation": ""}
-    
-    # 2. Tour Diary (The Master Chronological Record)
-    # Matches the "Tour Diary" PDF columns
-    if "diary_entries" not in st.session_state:
-        st.session_state.diary_entries = pd.DataFrame(columns=[
-            "Dep_Date", "Dep_Time", "Dep_Place",
-            "Arr_Date", "Arr_Time", "Arr_Place",
-            "Mode", "Class", "Ticket_Amount",
-            "Enquiry_Fare_If_Private", # Crucial for private vehicle
-            "Vehicle_Details", # For road travel details
-            "Stay_Duration_Hrs", # Helper for DA
-            "Remark"
-        ])
-    
-    # 3. Calculation States (TA & DA Separated and Editable)
-    if "ta_calc_table" not in st.session_state:
-        st.session_state.ta_calc_table = pd.DataFrame(columns=[
-            "Route", "Mode_Used", "Claimed_Fare", "Admissible_Fare", "Rule_Applied", "Justification"
-        ])
-    if "da_calc_table" not in st.session_state:
-        st.session_state.da_calc_table = pd.DataFrame(columns=[
-            "Date", "City", "City_Class", "DA_Rate", "Days_Claimable", "Total_DA", "Rule_Applied"
-        ])
+        st.session_state.salary_info = {"Basic Pay": 0, "Pay Level": "Level 12", "Designation": "Associate Professor"}
 
 init_session()
 
 # --- HELPER FUNCTIONS ---
-
-def get_gemini_response(prompt, content_parts, api_key, response_format="text"):
+def get_gemini_response(prompt, content_parts, api_key):
     try:
-        if not api_key:
-            return "Error: API Key Missing"
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(AI_MODEL_NAME)
-        
-        # Generation config
-        config = genai.types.GenerationConfig(
-            candidate_count=1,
-            temperature=0.2,
-        )
-        
-        if response_format == "json":
-             config.response_mime_type = "application/json"
-
-        response = model.generate_content([prompt, *content_parts], generation_config=config)
+        model = genai.GenerativeModel(AI_MODEL_NAME) 
+        response = model.generate_content([prompt, *content_parts])
         return response.text
     except Exception as e:
         return f"Error: {str(e)}"
@@ -87,346 +61,371 @@ def extract_text_from_pdf(uploaded_file):
         text += page.extract_text()
     return text
 
-def load_rules_context():
-    rules_text = ""
-    files = os.listdir(ST_RULES_DIR)
-    for f in files:
-        path = os.path.join(ST_RULES_DIR, f)
-        try:
-            reader = PyPDF2.PdfReader(path)
-            for page in reader.pages:
-                rules_text += page.extract_text() + "\n"
-        except:
-            pass
-    return rules_text
+def calculate_da_rate(pay_level, city_class, stay_type):
+    """
+    Returns (Rate, Rule_Text) based on Revised Provisions 2024.
+    Rates are hardcoded based on the PDF rules provided.
+    """
+    # Parse Pay Level (Simplified logic)
+    try:
+        level_num = int(''.join(filter(str.isdigit, str(pay_level))))
+    except:
+        level_num = 10 # Default fallback
+    
+    # Logic for Level 12 and above
+    if level_num >= 12:
+        if stay_type == "Hotel":
+            if city_class == "X": return 2600, "Level 12+, X City, Hotel"
+            if city_class == "Y": return 2100, "Level 12+, Y City, Hotel"
+            return 1300, "Level 12+, Z City, Hotel"
+        else: # Regular/Guest House
+            if city_class == "X": return 1000, "Level 12+, X City, Ordinary"
+            if city_class == "Y": return 800, "Level 12+, Y City, Ordinary"
+            return 500, "Level 12+, Z City, Ordinary"
 
-# --- SIDEBAR ---
+    # Logic for Level 6 to 11
+    elif 6 <= level_num <= 11:
+        if stay_type == "Hotel":
+            if city_class == "X": return 2000, "Level 6-11, X City, Hotel"
+            if city_class == "Y": return 1600, "Level 6-11, Y City, Hotel"
+            return 900, "Level 6-11, Z City, Hotel"
+        else:
+            if city_class == "X": return 900, "Level 6-11, X City, Ordinary"
+            if city_class == "Y": return 700, "Level 6-11, Y City, Ordinary"
+            return 400, "Level 6-11, Z City, Ordinary"
+            
+    # Logic for Level 5 and below
+    else:
+        if stay_type == "Hotel":
+            if city_class == "X": return 900, "Level 5-, X City, Hotel"
+            if city_class == "Y": return 800, "Level 5-, Y City, Hotel"
+            return 500, "Level 5-, Z City, Hotel"
+        else:
+            if city_class == "X": return 700, "Level 5-, X City, Ordinary"
+            if city_class == "Y": return 500, "Level 5-, Y City, Ordinary"
+            return 300, "Level 5-, Z City, Ordinary"
+
+def get_city_class(city_name):
+    # Simplified Dictionary based on Circular 1734
+    x_cities = ["Ahmedabad", "Bengaluru", "Chennai", "Delhi", "Hyderabad", "Kolkata", "Mumbai", "Pune", "Gandhinagar"]
+    y_cities = ["Vadodara", "Surat", "Rajkot", "Jamnagar", "Bhavnagar", "Anand", "Navsari"] # Added common GJ cities
+    
+    city_norm = str(city_name).strip().title()
+    for x in x_cities:
+        if x in city_norm: return "X"
+    for y in y_cities:
+        if y in city_norm: return "Y"
+    return "Z"
+
+# --- MAIN UI ---
+st.title("🚜 NAU TA/DA Claim Assistant")
+
+# Sidebar
 with st.sidebar:
-    st.title("🚜 NAU Assistant")
+    st.header("Settings")
     api_key = st.text_input("Gemini API Key", type="password")
     st.divider()
-    st.subheader("📜 Rules/Statutes")
-    uploaded_rules = st.file_uploader("Upload Circulars", type=["pdf"], accept_multiple_files=True)
-    if uploaded_rules:
-        for rule_file in uploaded_rules:
-            with open(os.path.join(ST_RULES_DIR, rule_file.name), "wb") as f:
-                f.write(rule_file.getbuffer())
-        st.success("Rules Loaded!")
+    st.markdown("### 📋 User Profile")
+    st.session_state.salary_info["Designation"] = st.text_input("Designation", st.session_state.salary_info.get("Designation"))
+    st.session_state.salary_info["Pay Level"] = st.selectbox("Pay Level", ["Level 14", "Level 13A", "Level 13", "Level 12", "Level 11", "Level 10", "Level 9", "Level 8", "Level 7"], index=3)
+    st.session_state.salary_info["Basic Pay"] = st.number_input("Basic Pay", value=st.session_state.salary_info.get("Basic Pay", 0))
 
-# --- MAIN APP ---
-st.title("NAU TA/DA Reimbursement Assistant")
-
-tabs = st.tabs(["1. Uploads & Salary", "2. Tour Diary (Master Data)", "3. Calculation (TA & DA) & Report"])
+# Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["1. Upload & Extract", "2. Edit Tour & Stay", "3. Review Calculations", "4. Export Doc"])
 
 # --- TAB 1: UPLOADS ---
-with tabs[0]:
+with tab1:
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.subheader("A. Salary Details")
-        st.caption("Needed for Pay Level & DA Rate logic")
-        sal_file = st.file_uploader("Upload Salary Slip", type=["pdf", "jpg", "png"])
-        if sal_file and st.button("Extract Salary Info"):
-            with st.spinner("Reading Salary Slip..."):
-                content = []
-                if sal_file.type == "application/pdf":
-                    content.append(extract_text_from_pdf(sal_file))
-                else:
-                    content.append(Image.open(sal_file))
-                
-                prompt = """Extract JSON: {"Basic Pay": number, "Pay Level": "string", "Designation": "string"}"""
-                res = get_gemini_response(prompt, content, api_key, "json")
-                try:
-                    st.session_state.salary_info = json.loads(res)
-                    st.success("Extracted!")
-                except:
-                    st.error("Manual entry required.")
-
-        # Editable Salary Fields
-        c1, c2, c3 = st.columns(3)
-        st.session_state.salary_info["Designation"] = c1.text_input("Designation", st.session_state.salary_info.get("Designation"))
-        st.session_state.salary_info["Pay Level"] = c2.text_input("Pay Level", st.session_state.salary_info.get("Pay Level"))
-        st.session_state.salary_info["Basic Pay"] = c3.number_input("Basic Pay", value=float(st.session_state.salary_info.get("Basic Pay", 0)))
-
-    with col2:
-        st.subheader("B. Tour Proofs")
-        st.caption("Tickets, Tour Diary, Enquiry Fares (for Private Vehicle)")
-        tour_files = st.file_uploader("Upload Documents", accept_multiple_files=True)
-        
-        if tour_files and st.button("Extract to Tour Diary"):
-            if not api_key:
-                st.error("API Key required")
-            else:
-                with st.spinner("AI is converting proofs to Chronological Diary..."):
-                    content = ["You are a Data Entry Clerk. Create a chronological list of journey legs."]
-                    for tf in tour_files:
-                        if tf.type == "application/pdf":
-                            content.append(f"File {tf.name}: " + extract_text_from_pdf(tf))
-                        else:
-                            content.append(Image.open(tf))
-                    
-                    prompt = """
-                    Analyze the documents and output a JSON list of objects representing the Tour Diary rows.
-                    Follow this EXACT format for keys:
-                    [
-                        {
-                            "Dep_Date": "DD-MM-YYYY", "Dep_Time": "HH:MM", "Dep_Place": "City",
-                            "Arr_Date": "DD-MM-YYYY", "Arr_Time": "HH:MM", "Arr_Place": "City",
-                            "Mode": "Bus/Rail/Air/Private Vehicle/Official Car",
-                            "Class": "AC-2/Sleeper/Economy/etc",
-                            "Ticket_Amount": 0.0,
-                            "Enquiry_Fare_If_Private": 0.0,
-                            "Vehicle_Details": "e.g. GJ-05-AB-1234 Diesel (Only if Private)",
-                            "Remark": ""
-                        }
-                    ]
-                    
-                    LOGIC:
-                    1. If "Private Vehicle" is used, Ticket_Amount is usually 0, but look for documents saying "Enquiry Fare" or "GSRT Fare" and put that value in "Enquiry_Fare_If_Private".
-                    2. Arrange chronologically.
-                    """
-                    
-                    res = get_gemini_response(prompt, content, api_key, "json")
-                    try:
-                        data = json.loads(res)
-                        st.session_state.diary_entries = pd.DataFrame(data)
-                        st.success("Tour Diary Generated! Go to Tab 2 to edit.")
-                    except Exception as e:
-                        st.error(f"AI Error: {e}")
-
-# --- TAB 2: MASTER DATA ENTRY ---
-with tabs[1]:
-    st.header("📝 Tour Diary (Chronological)")
-    st.info("""
-    **Instructions:**
-    1. Enter rows chronologically (Departure -> Arrival).
-    2. **Private Vehicle Users:** You MUST enter the 'Enquiry Fare' (Public Transport equivalent) in the specific column.
-    3. **Stay:** If you stayed in a hotel, ensure the arrival at hotel and departure from hotel are clear in the timeline if claiming specific stay bills, or simply ensure the 'Arr_Date' and next 'Dep_Date' show the gap for DA calculation.
-    """)
+        st.info("Upload Tour Diary / Tickets")
+        files = st.file_uploader("Upload Files (PDF/Images)", accept_multiple_files=True)
     
-    # Column configuration for better UI
-    column_config = {
-        "Dep_Date": st.column_config.DateColumn("Dep Date", format="DD-MM-YYYY"),
-        "Dep_Time": st.column_config.TimeColumn("Dep Time", format="HH:mm"),
-        "Arr_Date": st.column_config.DateColumn("Arr Date", format="DD-MM-YYYY"),
-        "Arr_Time": st.column_config.TimeColumn("Arr Time", format="HH:mm"),
-        "Mode": st.column_config.SelectboxColumn("Mode", options=["Rail", "Bus", "Air", "Private Vehicle", "Govt Vehicle", "Auto/Taxi"]),
-        "Ticket_Amount": st.column_config.NumberColumn("Actual Paid (Rs)", help="Amount on the ticket"),
-        "Enquiry_Fare_If_Private": st.column_config.NumberColumn("Enquiry Fare (Rs)", help="MANDATORY if Private Vehicle used. The cost of Bus/Train for this route."),
-        "Vehicle_Details": st.column_config.TextColumn("Vehicle Details", help="If Private: e.g. Diesel Car GJ-12..."),
-    }
-
-    edited_diary = st.data_editor(
-        st.session_state.diary_entries,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config=column_config,
-        key="diary_editor"
-    )
-    st.session_state.diary_entries = edited_diary
-
-# --- TAB 3: CALCULATION & REPORT ---
-with tabs[2]:
-    st.header("💰 Calculation & Justification")
-    
-    # --- ACTION BUTTON ---
-    if st.button("🤖 Run AI Compliance Check & Calculate"):
+    if files and st.button("🚀 Auto-Extract Journey Data"):
         if not api_key:
-            st.error("Please enter API Key")
+            st.error("Please enter API Key.")
         else:
-            with st.spinner("Consulting Statutes & Calculating..."):
-                rules_txt = load_rules_context()
+            with st.spinner("Extracting journey details..."):
+                content = ["Extract all travel legs and stay details."]
+                for f in files:
+                    if f.type == "application/pdf":
+                        content.append(extract_text_from_pdf(f))
+                    else:
+                        content.append(Image.open(f))
                 
-                # Context Construction
-                payload = {
-                    "salary": st.session_state.salary_info,
-                    "diary": st.session_state.diary_entries.to_dict(orient="records")
-                }
+                prompt = """
+                Extract journey details into a JSON object with two lists: 'tour' and 'stay'.
                 
-                prompt = f"""
-                Act as the NAU University Auditor. Based on the RULES provided and the TOUR DIARY, calculate TA and DA.
-
-                **DEFINITIONS (from University Statutes):**
-                1. **Ticket Price:** Actual fare paid.
-                2. **Private Vehicle:** Reimbursement is RESTRICTED to the 'Enquiry Fare' (Public Transport Rate). Private mileage is NOT given.
-                3. **DA:** Based on Pay Level and City Class (X, Y, Z).
+                For 'tour' (Travel Legs):
+                [{"Dep_Date": "YYYY-MM-DD", "Dep_Time": "HH:MM", "Dep_Place": "City", 
+                  "Arr_Date": "YYYY-MM-DD", "Arr_Time": "HH:MM", "Arr_Place": "City",
+                  "Mode": "Bus/Rail/Air/Private/Taxi", "Distance_KM": 0, "Ticket_Amount": 0, "Enquiry_Fare": 0}]
                 
-                **YOUR TASK:**
-                Return a JSON object with two keys: "ta_table" and "da_table".
-                
-                "ta_table": List of objects [
-                    {{
-                        "Route": "Place A to Place B",
-                        "Mode_Used": "Private Vehicle", 
-                        "Claimed_Fare": 0, 
-                        "Admissible_Fare": 500, 
-                        "Rule_Applied": "Restricted to Public Transport Fare", 
-                        "Justification": "Private vehicle used, limited to Enquiry Fare as per Rule X."
-                    }}
-                ]
-                
-                "da_table": List of objects [
-                    {{
-                        "Date": "DD-MM-YYYY", 
-                        "City": "Surat", 
-                        "City_Class": "Y", 
-                        "DA_Rate": 800, 
-                        "Days_Claimable": 1, 
-                        "Total_DA": 800, 
-                        "Rule_Applied": "Pay Level 12 / Class Y",
-                        "Justification": "Full day absence in Y class city."
-                    }}
-                ]
-                
-                DATA:
-                {json.dumps(payload)}
-                
-                RULES CONTEXT:
-                {rules_txt[:40000]}
+                For 'stay' (Accommodation):
+                [{"CheckIn_Date": "YYYY-MM-DD", "CheckIn_Time": "HH:MM", 
+                  "CheckOut_Date": "YYYY-MM-DD", "CheckOut_Time": "HH:MM",
+                  "City": "City Name", "Stay_Type": "Hotel/Guest House", "Bill_Amount": 0}]
                 """
                 
-                res = get_gemini_response(prompt, [], api_key, "json")
+                res = get_gemini_response(prompt, content, api_key)
                 try:
-                    calcs = json.loads(res)
-                    st.session_state.ta_calc_table = pd.DataFrame(calcs["ta_table"])
-                    st.session_state.da_calc_table = pd.DataFrame(calcs["da_table"])
-                    st.success("Calculations Completed based on Rules!")
+                    clean = res.replace("```json", "").replace("```", "")
+                    data = json.loads(clean)
+                    
+                    if "tour" in data:
+                        st.session_state.tour_data = pd.DataFrame(data["tour"])
+                    if "stay" in data:
+                        st.session_state.stay_data = pd.DataFrame(data["stay"])
+                    st.success("Extraction Complete! Go to 'Edit' tab.")
                 except Exception as e:
-                    st.error(f"Calculation Parsing Error: {e}")
+                    st.error(f"Extraction failed: {e}")
 
-    # --- SECTION A: TRAVEL ALLOWANCE (TA) ---
-    st.subheader("A. Travel Allowance (TA) Calculation")
-    st.caption("Verify the 'Admissible Fare' and the 'Rule Applied'. Edit if necessary.")
+# --- TAB 2: EDIT DATA ---
+with tab2:
+    st.markdown("### 🗓️ Chronological Tour Data")
+    st.caption("Please ensure Date format is YYYY-MM-DD and Time is HH:MM")
     
-    edited_ta = st.data_editor(
-        st.session_state.ta_calc_table,
-        use_container_width=True,
+    # 1. TOUR DATA EDITOR
+    st.subheader("A. Journey Details (TA)")
+    
+    mode_options = [
+        "Government Bus (GSRTC)", "Railway", "Air", 
+        "Road - Private Vehicle (Petrol)", "Road - Private Vehicle (Diesel)", 
+        "Taxi/Auto", "Official Vehicle"
+    ]
+    
+    column_config_tour = {
+        "Dep_Date": st.column_config.DateColumn("Dep. Date"),
+        "Dep_Time": st.column_config.TimeColumn("Dep. Time"),
+        "Arr_Date": st.column_config.DateColumn("Arr. Date"),
+        "Arr_Time": st.column_config.TimeColumn("Arr. Time"),
+        "Mode": st.column_config.SelectboxColumn("Mode", options=mode_options, required=True),
+        "Vehicle_Details": st.column_config.TextColumn("Vehicle Details", help="e.g. Car No. GJ-05..."),
+        "Ticket_Amount": st.column_config.NumberColumn("Ticket Paid (Rs)"),
+        "Enquiry_Fare": st.column_config.NumberColumn("Enquiry Fare (Rs)", help="REQUIRED for Private Vehicle claims"),
+    }
+    
+    edited_tour = st.data_editor(
+        st.session_state.tour_data,
+        column_config=column_config_tour,
         num_rows="dynamic",
-        column_config={
-            "Admissible_Fare": st.column_config.NumberColumn("Admissible Amt (Rs)", required=True),
-            "Justification": st.column_config.TextColumn("Reason / Rule", width="large")
-        }
+        use_container_width=True,
+        key="tour_editor"
     )
-    st.session_state.ta_calc_table = edited_ta
-    
-    total_ta = pd.to_numeric(edited_ta["Admissible_Fare"], errors='coerce').sum()
-    st.metric("Total TA Admissible", f"₹ {total_ta:,.2f}")
+    st.session_state.tour_data = edited_tour
 
     st.divider()
 
-    # --- SECTION B: DAILY ALLOWANCE (DA) ---
-    st.subheader("B. Daily Allowance (DA) Calculation")
-    st.caption("Verify DA Rate and Days. The 'Rule Applied' column explains the rate choice.")
+    # 2. STAY DATA EDITOR
+    st.subheader("B. Stay / Accommodation Details (DA)")
     
-    edited_da = st.data_editor(
-        st.session_state.da_calc_table,
-        use_container_width=True,
+    column_config_stay = {
+        "CheckIn_Date": st.column_config.DateColumn("Check-In"),
+        "CheckOut_Date": st.column_config.DateColumn("Check-Out"),
+        "Stay_Type": st.column_config.SelectboxColumn("Type", options=["Hotel", "Guest House", "Own Arrangement"]),
+        "City": st.column_config.TextColumn("City", help="Determines X, Y, Z Class"),
+        "Bill_Amount": st.column_config.NumberColumn("Bill Amount")
+    }
+    
+    edited_stay = st.data_editor(
+        st.session_state.stay_data,
+        column_config=column_config_stay,
         num_rows="dynamic",
-        column_config={
-            "Total_DA": st.column_config.NumberColumn("Total DA (Rs)", required=True),
-            "Justification": st.column_config.TextColumn("Reason / Rule", width="large")
-        }
+        use_container_width=True,
+        key="stay_editor"
     )
-    st.session_state.da_calc_table = edited_da
+    st.session_state.stay_data = edited_stay
+
+# --- TAB 3: CALCULATIONS ---
+with tab3:
+    st.header("🧮 Claims Calculation")
     
-    total_da = pd.to_numeric(edited_da["Total_DA"], errors='coerce').sum()
-    st.metric("Total DA Admissible", f"₹ {total_da:,.2f}")
+    if st.button("Calculate TA & DA"):
+        # 1. TA CALCULATION
+        st.subheader("1. Travelling Allowance (TA)")
+        ta_claim_data = []
+        total_ta = 0
+        
+        for idx, row in st.session_state.tour_data.iterrows():
+            mode = str(row.get("Mode", ""))
+            ticket = float(row.get("Ticket_Amount", 0) or 0)
+            enquiry = float(row.get("Enquiry_Fare", 0) or 0)
+            claimed = 0
+            rule = ""
+            
+            if "Private Vehicle" in mode:
+                claimed = enquiry
+                rule = "Private Vehicle: Restricted to Official Enquiry Fare (No Mileage)"
+            elif "Official Vehicle" in mode:
+                claimed = 0
+                rule = "Official Vehicle: No Claim Admissible"
+            else:
+                claimed = ticket
+                rule = "Public Transport: Actual Ticket Amount"
+            
+            total_ta += claimed
+            ta_claim_data.append({
+                "Date": row.get("Dep_Date"),
+                "From": row.get("Dep_Place"),
+                "To": row.get("Arr_Place"),
+                "Mode": mode,
+                "Claimed": claimed,
+                "Rule Applied": rule
+            })
+            
+        st.dataframe(pd.DataFrame(ta_claim_data))
+        st.metric("Total TA Claim", f"₹ {total_ta}")
+        
+        # 2. DA CALCULATION
+        st.subheader("2. Daily Allowance (DA)")
+        da_claim_data = []
+        total_da = 0
+        
+        # Process Stays
+        for idx, row in st.session_state.stay_data.iterrows():
+            city = row.get("City", "Gandhinagar")
+            stay_type = row.get("Stay_Type", "Guest House")
+            
+            # Determine Class and Rate
+            c_class = get_city_class(city)
+            rate, rule_desc = calculate_da_rate(st.session_state.salary_info["Pay Level"], c_class, stay_type)
+            
+            # Simple day diff calculation (Enhance logic for partial days if needed)
+            try:
+                d1 = pd.to_datetime(row["CheckIn_Date"])
+                d2 = pd.to_datetime(row["CheckOut_Date"])
+                days = (d2 - d1).days
+                if days < 1: days = 1 # Minimum 1 day if dates are same
+            except:
+                days = 0
+                
+            amount = rate * days
+            total_da += amount
+            
+            da_claim_data.append({
+                "City": city,
+                "Class": c_class,
+                "Stay Type": stay_type,
+                "Rate": rate,
+                "Days": days,
+                "Total": amount,
+                "Rule": rule_desc
+            })
+            
+        st.dataframe(pd.DataFrame(da_claim_data))
+        st.metric("Total DA Claim", f"₹ {total_da}")
+        
+        st.success(f"GRAND TOTAL: ₹ {total_ta + total_da}")
+        
+        # Save calculated totals for export
+        st.session_state.calc_totals = {"TA": total_ta, "DA": total_da, "Grand": total_ta + total_da}
+        st.session_state.ta_details = ta_claim_data
+        st.session_state.da_details = da_claim_data
+
+# --- TAB 4: EXPORT ---
+with tab4:
+    st.header("📄 Export Tour Diary")
     
-    st.divider()
-    st.markdown(f"### 🏁 GRAND TOTAL CLAIM: ₹ {total_ta + total_da:,.2f}")
+    if st.button("Generate Word Document (.docx)"):
+        doc = Document()
+        
+        # Title
+        title = doc.add_paragraph("NAU TOUR DIARY & CLAIM FORM")
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title.style = doc.styles['Title']
+        
+        # Personal Info
+        doc.add_paragraph(f"Name: Vaibhav Kumar Kanubhai Chaudhari") # Pulled from user data or hardcoded
+        doc.add_paragraph(f"Designation: {st.session_state.salary_info.get('Designation')}")
+        doc.add_paragraph(f"Pay Level: {st.session_state.salary_info.get('Pay Level')}")
+        doc.add_paragraph(f"Headquarters: Navsari Agricultural University")
+        
+        # 1. Journey Table
+        doc.add_heading('1. Details of Journey (TA)', level=2)
+        table = doc.add_table(rows=1, cols=6)
+        table.style = 'Table Grid'
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Date/Time'
+        hdr_cells[1].text = 'From'
+        hdr_cells[2].text = 'To'
+        hdr_cells[3].text = 'Mode'
+        hdr_cells[4].text = 'Rule Applied'
+        hdr_cells[5].text = 'Amount (Rs)'
+        
+        # Sort tour data by date before printing
+        sorted_tour = st.session_state.tour_data.sort_values(by="Dep_Date")
+        
+        for idx, row in sorted_tour.iterrows():
+            row_cells = table.add_row().cells
+            row_cells[0].text = f"{row.get('Dep_Date')}\n{row.get('Dep_Time')}"
+            row_cells[1].text = str(row.get('Dep_Place'))
+            row_cells[2].text = str(row.get('Arr_Place'))
+            
+            mode_txt = str(row.get('Mode'))
+            if "Private" in mode_txt:
+                mode_txt += f"\n({row.get('Vehicle_Details', '')})"
+            row_cells[3].text = mode_txt
+            
+            # Logic for amount and rule
+            amt = row.get('Ticket_Amount', 0)
+            rule_note = "Actual Ticket"
+            if "Private" in mode_txt:
+                amt = row.get('Enquiry_Fare', 0)
+                rule_note = "Restricted to Fare Enquiry"
+            
+            row_cells[4].text = rule_note
+            row_cells[5].text = str(amt)
+            
+        # 2. Stay Table
+        doc.add_heading('2. Daily Allowance (DA)', level=2)
+        da_table = doc.add_table(rows=1, cols=5)
+        da_table.style = 'Table Grid'
+        da_hdr = da_table.rows[0].cells
+        da_hdr[0].text = 'City'
+        da_hdr[1].text = 'Class (X/Y/Z)'
+        da_hdr[2].text = 'Stay Type'
+        da_hdr[3].text = 'Rate'
+        da_hdr[4].text = 'Days'
+        
+        if "da_details" in st.session_state:
+            for item in st.session_state.da_details:
+                row_cells = da_table.add_row().cells
+                row_cells[0].text = str(item['City'])
+                row_cells[1].text = str(item['Class'])
+                row_cells[2].text = str(item['Stay Type'])
+                row_cells[3].text = str(item['Rate'])
+                row_cells[4].text = str(item['Days'])
 
-    # --- PDF EXPORT ---
-    if st.button("📄 Download NAU Tour Diary PDF"):
+        # Totals
+        doc.add_paragraph(f"\nTotal TA Claim: Rs. {st.session_state.get('calc_totals', {}).get('TA', 0)}")
+        doc.add_paragraph(f"Total DA Claim: Rs. {st.session_state.get('calc_totals', {}).get('DA', 0)}")
+        grand_p = doc.add_paragraph(f"GRAND TOTAL: Rs. {st.session_state.get('calc_totals', {}).get('Grand', 0)}")
+        grand_p.runs[0].bold = True
         
-        class PDF(FPDF):
-            def header(self):
-                self.set_font('Arial', 'B', 12)
-                self.cell(0, 10, 'NAVSARI AGRICULTURAL UNIVERSITY', 0, 1, 'C')
-                self.set_font('Arial', 'B', 10)
-                self.cell(0, 10, 'TRAVELLING ALLOWANCE BILL / TOUR DIARY', 0, 1, 'C')
-                self.ln(5)
+        # Definitions Footer
+        doc.add_page_break()
+        doc.add_heading('Definitions & Rules Applied', level=3)
+        
+        definitions = [
+            ("Mode of Transport", "Means the actual means of conveyance used by the employee..."),
+            ("Road Travel by Other Vehicle", "Means travel performed by a mode other than Railway or Air... Use of private vehicle is not ordinarily admissible... restricted to fare determined through official fare enquiry."),
+            ("Daily Allowance Rate", "Determined on the basis of employee pay level and city classification (X, Y, Z)."),
+            ("Days of Daily Allowance", "Calculated based on absence from headquarters.")
+        ]
+        
+        for title, text in definitions:
+            p = doc.add_paragraph()
+            p.add_run(title + ": ").bold = True
+            p.add_run(text)
 
-        pdf = PDF(orientation='L', unit='mm', format='A4') # Landscape for wide table
-        pdf.add_page()
-        pdf.set_font("Arial", size=9)
+        # Save to buffer
+        from io import BytesIO
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
         
-        # User Header Info
-        designation = st.session_state.salary_info.get("Designation", "")
-        pay = st.session_state.salary_info.get("Basic Pay", "")
-        pdf.cell(0, 8, f"Name & Designation: {designation} | Basic Pay: {pay}", 0, 1)
-        pdf.ln(5)
-        
-        # Table Header
-        # Columns based on "Tour Diary" PDF
-        # Sr, Dep(Place,Date,Time), Arr(Place,Date,Time), Mode, Class, TicketAmt, VehicleDetails, DA(Days,Rate,Amt), Total
-        headers = ["Dep Place", "Dep Date", "Time", "Arr Place", "Arr Date", "Time", "Mode", "Class", "Fare (Rs)", "Vehicle/Petrol Details", "DA Days", "DA Rate", "DA Amt", "Total"]
-        col_widths = [25, 20, 12, 25, 20, 12, 20, 15, 18, 40, 15, 15, 18, 20]
-        
-        pdf.set_font("Arial", 'B', 8)
-        for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 10, h, 1, 0, 'C')
-        pdf.ln()
-        
-        # Table Rows
-        # We need to map the Diary Entries + Calculated DA to this row structure.
-        # This is a bit complex because DA might be calculated per day, but the diary is per trip.
-        # For simplicity in this demo, we will print the Diary Rows and fill DA where available.
-        
-        pdf.set_font("Arial", size=8)
-        
-        diary = st.session_state.diary_entries
-        
-        for idx, row in diary.iterrows():
-            # Format Data
-            d_date = str(row.get("Dep_Date", ""))
-            d_time = str(row.get("Dep_Time", ""))
-            d_place = str(row.get("Dep_Place", ""))[:15]
-            
-            a_date = str(row.get("Arr_Date", ""))
-            a_time = str(row.get("Arr_Time", ""))
-            a_place = str(row.get("Arr_Place", ""))[:15]
-            
-            mode = str(row.get("Mode", ""))[:10]
-            cls = str(row.get("Class", ""))[:8]
-            
-            # Fare Logic: If Private, show Enquiry Fare
-            fare = row.get("Ticket_Amount", 0)
-            details = str(row.get("Vehicle_Details", ""))
-            
-            if "private" in mode.lower():
-                fare = row.get("Enquiry_Fare_If_Private", 0)
-                if not details or details == "nan": details = "Pvt Veh (Enquiry Fare)"
-            
-            # Simple line height
-            h = 8
-            
-            pdf.cell(col_widths[0], h, d_place, 1)
-            pdf.cell(col_widths[1], h, d_date, 1)
-            pdf.cell(col_widths[2], h, d_time, 1)
-            pdf.cell(col_widths[3], h, a_place, 1)
-            pdf.cell(col_widths[4], h, a_date, 1)
-            pdf.cell(col_widths[5], h, a_time, 1)
-            pdf.cell(col_widths[6], h, mode, 1)
-            pdf.cell(col_widths[7], h, cls, 1)
-            pdf.cell(col_widths[8], h, str(fare), 1)
-            pdf.cell(col_widths[9], h, details[:25], 1)
-            
-            # DA Columns (Leaving blank or finding match - simplified here to allow manual fill on paper if complex)
-            # In a full production app, you'd match the DA table dates to these rows.
-            pdf.cell(col_widths[10], h, "", 1) # DA Days
-            pdf.cell(col_widths[11], h, "", 1) # Rate
-            pdf.cell(col_widths[12], h, "", 1) # Amt
-            pdf.cell(col_widths[13], h, "", 1) # Total
-            
-            pdf.ln()
-
-        pdf.ln(10)
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 10, f"TOTAL CLAIM ADMISSIBLE (Calculated by App): Rs. {total_ta + total_da}", 0, 1)
-        pdf.set_font("Arial", 'I', 8)
-        pdf.cell(0, 10, "Note: This is a computer-generated assistance draft. Please attach original tickets.", 0, 1)
-
-        pdf_bytes = pdf.output(dest='S').encode('latin-1', 'ignore')
-        st.download_button("Download PDF", pdf_bytes, "NAU_Tour_Diary.pdf", "application/pdf")
-
-
+        st.download_button(
+            label="Download Tour Diary (.docx)",
+            data=buffer,
+            file_name="NAU_Tour_Diary.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
