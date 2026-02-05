@@ -27,7 +27,7 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
     """
     1. Uploads Saved Rules (Statutes).
     2. Uploads Current Trip Docs.
-    3. Uses Gemini 1.5 Pro to calculate based on the Rules.
+    3. Uses gemini-3-pro-preview to calculate based on the Rules.
     """
     if not api_key:
         return {"error": "No API Key provided"}
@@ -187,4 +187,5 @@ def create_word_doc(diary_df, ta_df, da_df):
                 row_cells[i].text = str(item)
 
     return doc
+
 
