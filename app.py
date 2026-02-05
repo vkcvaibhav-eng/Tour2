@@ -11,7 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import datetime
 
 # --- CONFIGURATION ---
-AI_MODEL_NAME = "gemini-2.0-flash" 
+AI_MODEL_NAME = "gemini-3-flash-preview" 
 ST_DATA_DIR = "data_store"
 ST_RULES_DIR = "rules_store"
 os.makedirs(ST_DATA_DIR, exist_ok=True)
@@ -434,3 +434,4 @@ with tab4:
             file_name="NAU_Tour_Diary.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
