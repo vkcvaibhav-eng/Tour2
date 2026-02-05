@@ -2,4 +2,4 @@ streamlit
 google-generativeai
 pandas
 python-docx
-python-dotenv
+openpyxl
