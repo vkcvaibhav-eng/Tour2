@@ -76,7 +76,7 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
       ]
     }
     """
-    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    model = genai.GenerativeModel(model_name="gemini-3-pro-preview")
     try:
         response = model.generate_content([system_instruction, context_prompt, *gemini_files])
         return response.text
@@ -226,4 +226,5 @@ def create_complex_claim_form(diary_df, ta_df, da_df):
         row_cells[19].text = ""
 
     return doc
+
 
