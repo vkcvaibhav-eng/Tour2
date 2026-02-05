@@ -26,7 +26,7 @@ def list_saved_rules():
 
 def call_gemini_extraction(api_key, trip_files, context_prompt):
     """
-    Uses Gemini 1.5 Pro to extract data based on Statutes.
+    Uses gemini-3-pro-preview to extract data based on Statutes.
     """
     if not api_key:
         return {"error": "No API Key provided"}
@@ -226,3 +226,4 @@ def create_complex_claim_form(diary_df, ta_df, da_df):
         row_cells[19].text = ""
 
     return doc
+
