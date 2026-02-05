@@ -18,7 +18,7 @@ st.sidebar.header("Configuration")
 api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 model_choice = st.sidebar.selectbox(
     "Select Model", 
-    ["gemini-1.5-pro", "gemini-1.5-flash"],
+    ["gemini-3-pro-preview", "gemini-3-flash-preview"],
     index=0,
     help="Pro is better for complex reasoning; Flash is faster."
 )
@@ -225,3 +225,4 @@ if 'df' in st.session_state:
             file_name="Final_Tour_Diary.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
