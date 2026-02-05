@@ -120,7 +120,7 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
     """
 
     # Use 1.5 Pro for complex reasoning (Rules + Math)
-    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    model = genai.GenerativeModel(model_name="gemini-3-pro-preview")
 
     try:
         response = model.generate_content([system_instruction, context_prompt, *gemini_files])
@@ -187,3 +187,4 @@ def create_word_doc(diary_df, ta_df, da_df):
                 row_cells[i].text = str(item)
 
     return doc
+
