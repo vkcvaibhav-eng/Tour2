@@ -9,7 +9,7 @@ from fpdf import FPDF
 from datetime import datetime
 
 # --- CONFIGURATION ---
-AI_MODEL_NAME = "gemini-3-pro-preview" 
+AI_MODEL_NAME = "gemini-3-flash-preview" 
 ST_DATA_DIR = "data_store"
 ST_RULES_DIR = "rules_store"
 os.makedirs(ST_DATA_DIR, exist_ok=True)
@@ -428,4 +428,5 @@ with tabs[2]:
 
         pdf_bytes = pdf.output(dest='S').encode('latin-1', 'ignore')
         st.download_button("Download PDF", pdf_bytes, "NAU_Tour_Diary.pdf", "application/pdf")
+
 
