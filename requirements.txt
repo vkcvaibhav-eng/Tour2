@@ -1,9 +1,7 @@
 streamlit
 google-generativeai
 pandas
-fpdf
-Pillow
-PyPDF2
-python-dotenv
 python-docx
 openpyxl
+Pillow
+PyPDF2
