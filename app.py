@@ -11,7 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import datetime
 
 # --- CONFIGURATION ---
-AI_MODEL_NAME = "gemini-3-flash-preview" 
+AI_MODEL_NAME = "gemini-2.0-flash" 
 ST_DATA_DIR = "data_store"
 ST_RULES_DIR = "rules_store"
 os.makedirs(ST_DATA_DIR, exist_ok=True)
@@ -334,7 +334,8 @@ with tab4:
         title.style = doc.styles['Title']
         
         # Personal Info
-        doc.add_paragraph(f"Name: Vaibhav Kumar Kanubhai Chaudhari") # Pulled from user data or hardcoded
+        # Using a get() with a default to avoid errors if the key is missing
+        doc.add_paragraph(f"Name: {st.session_state.get('user_name', 'Vaibhav Kumar Kanubhai Chaudhari')}")
         doc.add_paragraph(f"Designation: {st.session_state.salary_info.get('Designation')}")
         doc.add_paragraph(f"Pay Level: {st.session_state.salary_info.get('Pay Level')}")
         doc.add_paragraph(f"Headquarters: Navsari Agricultural University")
@@ -401,21 +402,25 @@ with tab4:
         grand_p = doc.add_paragraph(f"GRAND TOTAL: Rs. {st.session_state.get('calc_totals', {}).get('Grand', 0)}")
         grand_p.runs[0].bold = True
         
-        # Definitions Footer
+        # Definitions Footer - FULL TEXT INSERTION
         doc.add_page_break()
         doc.add_heading('Definitions & Rules Applied', level=3)
         
         definitions = [
-            ("Mode of Transport", "Means the actual means of conveyance used by the employee..."),
-            ("Road Travel by Other Vehicle", "Means travel performed by a mode other than Railway or Air... Use of private vehicle is not ordinarily admissible... restricted to fare determined through official fare enquiry."),
-            ("Daily Allowance Rate", "Determined on the basis of employee pay level and city classification (X, Y, Z)."),
-            ("Days of Daily Allowance", "Calculated based on absence from headquarters.")
+            ("Mode of Transport (Railway / Bus / Flight)", "Means the actual means of conveyance used by the employee for performing the journey on official tour, such as Railway, Public Bus, or Air, as recorded in the tour diary and supported by valid travel documents."),
+            ("Class of Travel (I / II / III)", "Means the category of travel entitlement applicable to a University employee for performing a journey on official tour, such as First Class, Second Class, or Third Class, as per the employee’s pay level, designation, and eligibility prescribed under the Travelling Allowance Rules."),
+            ("Ticket Price / Rate (Rs.)", "Means the actual fare paid in rupees for travel by the entitled mode and class for performing a journey on official tour, as supported by the original travel ticket, receipt, or authorised proof of fare. Where the original ticket or receipt is not available, the fare determined through an official fare enquiry from the Railway / State Transport Bus / Airline for the same date, route, and eligible class of travel may be considered for the purpose of Travelling Allowance calculation, subject to admissibility under the rules and certification by the competent authority."),
+            ("Road Travel by Other Vehicle", "Means travel performed on official tour by a mode of road transport other than Railway or Air, such as State Transport Bus, Metro, Auto-rickshaw, Taxi, or other public conveyance, used for the journey between places connected by road. In cases where travel is performed by a motor vehicle powered by diesel or petrol, the type of vehicle and fuel used shall be clearly indicated in the tour diary. However, use of a private vehicle is not ordinarily admissible for reimbursement in the University, and in such cases, Travelling Allowance shall be restricted to the fare determined through an official fare enquiry of the eligible public transport for the same route and distance. Reimbursement for road travel shall be regulated on the basis of fare enquiry or admissible public conveyance rates, and not on the basis of private vehicle ownership, even though provisions for road mileage exist under the rules. Travel by auto-rickshaw, metro rail, city bus, or other recognised public transport is admissible for calculation of Travelling Allowance, subject to necessity, reasonableness, and certification in the tour diary."),
+            ("Days of Daily Allowance receivable", "Means the number of days for which Daily Allowance (DA) is admissible to a University employee while on tour, determined on the basis of the total duration of absence from headquarters, including journey time, and calculated in accordance with the minimum time limits prescribed under the Travelling Allowance Rules."),
+            ("Daily Allowance Rate (Rs.)", "Means the monetary rate of Daily Allowance prescribed in rupees and applicable to a University employee for a day of tour, determined on the basis of the employee’s pay level/grade and the classification of the city or place of halt, as notified under the Travelling Allowance provisions.")
         ]
         
         for title, text in definitions:
             p = doc.add_paragraph()
             p.add_run(title + ": ").bold = True
             p.add_run(text)
+            # Add a small spacing after each definition
+            p.paragraph_format.space_after = Pt(12)
 
         # Save to buffer
         from io import BytesIO
@@ -429,4 +434,3 @@ with tab4:
             file_name="NAU_Tour_Diary.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
