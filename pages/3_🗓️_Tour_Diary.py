@@ -34,6 +34,39 @@ def sort_diary(df):
         pass
     return df
 
+def clean_mode_name(mode_str):
+    """Standardizes mode names based on your PDF rules."""
+    if not isinstance(mode_str, str):
+        return mode_str
+    
+    m = mode_str.lower().strip()
+    
+    # 1. Handle Private Vehicle (replace Car/Jeep)
+    if m in ["car", "personal car", "own car", "jeep", "cab"]:
+        return "Private Vehicle"
+    
+    # 2. Handle Auto
+    if "auto" in m or "rickshaw" in m:
+        return "Auto Rickshaw"
+        
+    # 3. Handle Flight
+    if "flight" in m or "air" in m:
+        return "Flight"
+        
+    # 4. Handle Rail
+    if "rail" in m or "train" in m:
+        return "Rail"
+    
+    # 5. Handle University/Govt Vehicle
+    if "uni" in m or "govt" in m or "university" in m:
+        # If it already has the number in brackets, keep it
+        if "(" in mode_str:
+            return mode_str
+        # Otherwise, standardize the name (user can add number in table)
+        return "University Vehicle"
+            
+    return mode_str.title() 
+
 # --- 1. LOAD DATA ---
 if 'raw_diary_df' not in st.session_state:
     raw_response = st.session_state['extracted_data']
@@ -51,7 +84,7 @@ if 'raw_diary_df' not in st.session_state:
     except:
         diary_data = []
 
-    # --- UPDATED COLUMN ORDER (Your Request) ---
+    # Column Order
     desired_order = [
         "Departure_Place", "Departure_Date", "Departure_Time", 
         "Arrival_Place", "Arrival_Date", "Arrival_Time", 
@@ -63,6 +96,9 @@ if 'raw_diary_df' not in st.session_state:
         if col not in df.columns:
             df[col] = None
     
+    # --- FIX 1: Apply Standardization Logic Here ---
+    df["Mode_of_Travel"] = df["Mode_of_Travel"].apply(clean_mode_name)
+
     # Type Conversion
     for col in ["Departure_Date", "Arrival_Date"]:
         df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
@@ -77,7 +113,7 @@ st.session_state['raw_diary_df']["Arrival_Date"] = pd.to_datetime(st.session_sta
 
 
 # ==========================================
-# SECTION: EASY ADD ENTRY (Updated Order)
+# SECTION: EASY ADD ENTRY (Updated Form)
 # ==========================================
 st.markdown("### ➕ Add Details Easily")
 tab_travel, tab_stay = st.tabs(["🚌 Add Journey (Travel)", "🏨 Add Stay (Halt)"])
@@ -97,9 +133,22 @@ with tab_travel:
         arr_date = c5.date_input("5. Arrival Date")
         arr_time = c6.time_input("6. Arrival Time", value=None)
         
-        # Row 3: Mode & Purpose
-        c7, c8 = st.columns([1, 2])
-        mode = c7.text_input("7. Mode (e.g. Uni Vehicle (GJ-21-1234))")
+        # Row 3: Mode Selection
+        c7, c8 = st.columns([1.5, 2])
+        
+        with c7:
+            # Dropdown for Standard Modes
+            base_mode = st.selectbox(
+                "7. Mode of Transport", 
+                ["Bus", "Rail", "Private Vehicle", "University Vehicle", "Auto Rickshaw", "Flight", "Taxi"]
+            )
+            # Conditional Input for Vehicle Number
+            final_mode_val = base_mode
+            if base_mode == "University Vehicle":
+                veh_no = st.text_input("Vehicle Number (e.g. GJ-XX-1234)", placeholder="GJ-...")
+                if veh_no:
+                    final_mode_val = f"University Vehicle ({veh_no})"
+
         purpose = c8.text_input("8. Purpose of Journey", value="Official Work")
 
         if st.form_submit_button("Add Journey"):
@@ -110,7 +159,7 @@ with tab_travel:
                 "Arrival_Place": arr_place,
                 "Arrival_Date": pd.to_datetime(arr_date),
                 "Arrival_Time": arr_time,
-                "Mode_of_Travel": mode,
+                "Mode_of_Travel": final_mode_val, # Uses the combined string
                 "Purpose": purpose
             }
             st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], pd.DataFrame([new_row])], ignore_index=True)
@@ -149,11 +198,11 @@ with tab_stay:
 st.markdown("---")
 
 # ==========================================
-# SECTION: VIEW & EDIT TABLE (Specific Order)
+# SECTION: VIEW & EDIT TABLE
 # ==========================================
 st.info("👇 **Review Your Schedule**")
 
-# Reorder Dataframe just to be safe before showing
+# Ensure correct column order before showing
 st.session_state['raw_diary_df'] = st.session_state['raw_diary_df'][[
     "Departure_Place", "Departure_Date", "Departure_Time", 
     "Arrival_Place", "Arrival_Date", "Arrival_Time", 
@@ -174,9 +223,10 @@ edited_diary = st.data_editor(
         "Arrival_Date": st.column_config.DateColumn("5. Arr Date", format="DD-MM-YYYY"),
         "Arrival_Time": st.column_config.TimeColumn("6. Arr Time", format="HH:mm"),
         
+        # We keep this as TextColumn to allow "University Vehicle (GJ...)"
         "Mode_of_Travel": st.column_config.TextColumn(
-            "7. Mode (Detailed)", 
-            help="Type details like: 'University Vehicle (GJ-21-1234)' or 'Private Car'"
+            "7. Mode", 
+            help="Allowed: Bus, Rail, Flight, Auto Rickshaw, Private Vehicle, University Vehicle (No.)"
         ),
         "Purpose": st.column_config.TextColumn("8. Purpose")
     }
