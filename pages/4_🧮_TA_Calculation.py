@@ -82,14 +82,14 @@ if 'ta_calculation_df' not in st.session_state:
         
         # Only extract KM for Private/Uni vehicles (as per rule)
         if "private" in mode or "university" in mode or "car" in mode or "jeep" in mode:
-            # First, check if 'KM' exists in the diary dataframe itself
+            # First, check if 'KM' exists in the diary dataframe itself (Page 3)
             if "KM" in diary_df.columns and pd.notnull(diary_df.loc[idx, "KM"]):
                 try:
                     ta_df.at[idx, "Kilometer"] = float(diary_df.loc[idx, "KM"])
                 except:
                     pass
             
-            # If still 0, look back at Raw Gemini Data
+            # If still 0, look back at Raw Gemini Data (Page 2 Extraction)
             if ta_df.at[idx, "Kilometer"] == 0:
                 extracted_km = try_get_km_from_raw(row["Departure_Date"], row["Departure_Place"])
                 ta_df.at[idx, "Kilometer"] = extracted_km
@@ -103,7 +103,7 @@ df = st.session_state['ta_calculation_df']
 
 # --- Identify Missing Information ---
 
-# A. Private Car: Needs 'Fare' (Bus Equivalent) if 0. (KM should be filled by extraction, but ask if 0)
+# A. Private Car: Needs 'Fare' (Bus Equivalent) if 0. (KM should have been extracted)
 pvt_mask = df["Mode_of_Travel"].str.contains("Private|Car|Jeep", case=False, na=False)
 missing_pvt_fare = df[pvt_mask & (df["Ticket_Price_Rate"] == 0)]
 missing_pvt_km = df[pvt_mask & (df["Kilometer"] == 0)] # Fallback if extraction failed
@@ -120,7 +120,7 @@ missing_pub_fare = df[pub_mask & (df["Ticket_Price_Rate"] == 0)]
 attention_needed = missing_pvt_fare.index.union(missing_pvt_km.index).union(missing_auto_data.index).union(missing_pub_fare.index)
 
 if not attention_needed.empty:
-    st.warning(f"⚠️ Found {len(attention_needed)} items needing manual input.")
+    st.warning(f"⚠️ Found {len(attention_needed)} items needing manual input (Fares or Missing Distances).")
     
     with st.expander("📝 Smart Fill: Add Missing Fares & Distances", expanded=True):
         st.caption("Fill these details once, and I will update the table automatically.")
