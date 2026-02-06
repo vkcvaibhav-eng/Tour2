@@ -18,7 +18,7 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# --- EXACT COLUMN NAME DEFINITIONS (Constants to prevent KeyError) ---
+# --- EXACT COLUMN NAME DEFINITIONS ---
 COL1 = "1. Departure Place"
 COL2 = "2. Departure Date"
 COL3 = "3. Departure Time"
@@ -61,7 +61,6 @@ def extract_data_from_documents(uploaded_files):
         try:
             image_data = file.getvalue()
             image_parts = [{"mime_type": file.type, "data": image_data}]
-            # Gemini Prompt for ticket extraction
             prompt = "Analyze this Travel Ticket. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
             model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([prompt, image_parts[0]])
@@ -78,15 +77,7 @@ def extract_data_from_documents(uploaded_files):
 def validate_against_rules(table_df, salary_file, rules_file):
     model = genai.GenerativeModel('gemini-1.5-flash')
     table_json = table_df.to_json(orient="records")
-    prompt = f"""
-    You are a TA Audit Expert. Compare this TA Claim Table with the uploaded Salary Slip and TA Rules.
-    Claim Table Data: {table_json}
-    TASKS:
-    1. Identify Pay Level from Salary Slip.
-    2. Check if the 'Class' (Col 8) is allowed.
-    3. Check 'Rate' (Col 12) against rules.
-    If everything is correct, start with 'VALIDATED'.
-    """
+    prompt = f"""Audit TA Claim Table with Salary Slip and TA Rules. Claim Table: {table_json}. If correct, start with 'VALIDATED'."""
     response = model.generate_content([prompt, salary_file, rules_file])
     return response.text
 
@@ -105,7 +96,6 @@ ticket_files = st.file_uploader("Upload Tickets/Bills (PDF/Images)", accept_mult
 if ticket_files and st.button("🤖 Extract & Merge Ticket Data"):
     with st.spinner("Gemini is reading tickets..."):
         st.session_state['extracted_tickets'] = extract_data_from_documents(ticket_files)
-        # Force table reset to merge new data
         if 'ta_rearranged_df' in st.session_state: del st.session_state['ta_rearranged_df']
         st.success("Tickets extracted! Merging into table...")
         st.rerun()
@@ -123,12 +113,18 @@ def smart_calculation_logic(row):
     ticket_rate = 0.0
     travel_class = "2nd AC" if "rail" in mode else "Economy" if "flight" in mode else "Express"
     
+    # AI EXTRACTION ATTEMPT
     if 'extracted_tickets' in st.session_state:
         for t in st.session_state['extracted_tickets']:
             if str(t.get('date')) in diary_date or diary_date in str(t.get('date')):
                 ticket_rate = float(t.get('amount', 0))
                 if t.get('km', 0) > 0: km = float(t.get('km'))
                 break
+
+    # 🛑 MANUAL UPDATE LOGIC FOR PRIVATE VEHICLE 🛑
+    # If it's a private vehicle and Gemini didn't find a price
+    if ("private" in mode or "own" in mode) and ticket_rate == 0.0:
+        st.sidebar.warning(f"⚠️ Private Vehicle detected for {diary_date}. Please manually enter the 'Bus Fare Equivalent' in Column 9.")
 
     rate_per_km = 15.0 if ("auto" in mode or "rickshaw" in mode) else 0.0
     return pd.Series([
@@ -145,7 +141,6 @@ if 'ta_rearranged_df' not in st.session_state:
 
 st.subheader("2. Review & Edit TA Table")
 
-# SAFE CALCULATION BEFORE RENDERING
 df_to_edit = st.session_state['ta_rearranged_df'].copy()
 df_to_edit[COL10] = pd.to_numeric(df_to_edit[COL9], errors='coerce').fillna(0)
 df_to_edit[COL13] = df_to_edit[COL10] + (pd.to_numeric(df_to_edit[COL11], errors='coerce').fillna(0) * pd.to_numeric(df_to_edit[COL12], errors='coerce').fillna(0))
@@ -172,16 +167,16 @@ if COL9 in edited_ta.columns:
 # 📑 SECTION 2: AI RULE VALIDATION
 # ==========================================
 st.divider()
-st.subheader("3. AI Policy Validation (Rules & Salary Slip)")
+st.subheader("3. AI Policy Validation")
 col_a, col_b = st.columns(2)
 with col_a: sal_up = st.file_uploader("Upload Salary Slip", type=['pdf','png','jpg'], key="salary_val")
 with col_b: rules_up = st.file_uploader("Upload TA Rules", type=['pdf','txt'], key="rules_val")
 
 if st.button("⚖️ Run AI Audit"):
     if not sal_up or not rules_up:
-        st.error("Please upload both documents for validation.")
+        st.error("Please upload both documents.")
     else:
-        with st.spinner("Gemini is validating your claim..."):
+        with st.spinner("Validating..."):
             report = validate_against_rules(edited_ta, sal_up, rules_up)
             if "VALIDATED" in report.upper():
                 st.success(report)
