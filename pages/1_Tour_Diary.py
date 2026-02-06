@@ -3,7 +3,7 @@ import pandas as pd
 import utils
 import os
 import json
-from datetime import datetime, time
+from datetime import datetime, time, date
 
 st.set_page_config(layout="wide", page_title="Step 1: Tour Diary")
 st.title("🗓️ Step 1: Tour Diary")
@@ -24,14 +24,13 @@ def clean_mode_name(mode_str):
     if "flight" in m or "air" in m: return "Flight"
     if "rail" in m or "train" in m: return "Rail"
     if "uni" in m or "govt" in m:
-        if "(" in mode_str: return mode_str # Keep existing number
+        if "(" in mode_str: return mode_str 
         return "University Vehicle"
     return mode_str.title()
 
 def sort_diary(df):
-    """Sorts the diary chronologically by Departure Date and Time."""
+    """Sorts the diary chronologically."""
     try:
-        # Create temp column for sorting
         df['temp_sort'] = df.apply(
             lambda x: datetime.combine(x['Departure_Date'], x['Departure_Time']) 
             if pd.notnull(x['Departure_Date']) and pd.notnull(x['Departure_Time']) 
@@ -43,14 +42,12 @@ def sort_diary(df):
     return df
 
 def cleanup_data_types(df):
-    """Converts mixed text/objects to actual Python Date/Time objects."""
-    # 1. Convert Dates
+    """Converts text/objects to actual Python Date/Time objects."""
     date_cols = ["Departure_Date", "Arrival_Date"]
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.date
 
-    # 2. Convert Times
     time_cols = ["Departure_Time", "Arrival_Time"]
     for col in time_cols:
         if col in df.columns:
@@ -65,17 +62,22 @@ def cleanup_data_types(df):
                     return None
             df[col] = df[col].apply(parse_time)
             
-    # 3. Clean Modes
     if "Mode_of_Travel" in df.columns:
         df["Mode_of_Travel"] = df["Mode_of_Travel"].apply(clean_mode_name)
-        
     return df
+
+# --- INITIALIZE STATE ---
+if 'raw_diary_df' not in st.session_state:
+    # Create empty dataframe with correct columns if nothing is uploaded yet
+    st.session_state['raw_diary_df'] = pd.DataFrame(columns=[
+        "Departure_Place", "Departure_Date", "Departure_Time",
+        "Arrival_Place", "Arrival_Date", "Arrival_Time",
+        "Mode_of_Travel", "KM", "Purpose"
+    ])
 
 # --- PART A: UPLOAD ---
 st.subheader("1. Upload Tour Diary")
-st.info("Upload your scanned Tour Diary (PDF or Image).")
-
-uploaded_diary = st.file_uploader("Select File", type=['pdf', 'jpg', 'jpeg', 'png'])
+uploaded_diary = st.file_uploader("Upload scanned Tour Diary (PDF/Image)", type=['pdf', 'jpg', 'jpeg', 'png'])
 
 TEMP_DIR = "temp_processing"
 if not os.path.exists(TEMP_DIR): os.makedirs(TEMP_DIR)
@@ -88,7 +90,6 @@ if uploaded_diary:
     if st.button("🚀 Extract Data from Diary"):
         with st.spinner("AI is reading the tour diary..."):
             try:
-                # Included KM in extraction prompt
                 prompt = """
                 Extract the tour diary details into JSON key "tour_diary". 
                 Fields: "Departure_Date", "Departure_Time", "Departure_Place", 
@@ -97,26 +98,53 @@ if uploaded_diary:
                 ENSURE TIMES ARE HH:MM (24hr).
                 """
                 response_text = utils.call_gemini_extraction(
-                    st.session_state['gemini_api_key'], 
-                    [file_path], 
-                    prompt
+                    st.session_state['gemini_api_key'], [file_path], prompt
                 )
-                
                 data = utils.clean_and_parse_json(response_text)
                 if "tour_diary" in data:
                     df = pd.DataFrame(data["tour_diary"])
                     df = cleanup_data_types(df)
-                    df = sort_diary(df)
-                    st.session_state['raw_diary_df'] = df
+                    st.session_state['raw_diary_df'] = sort_diary(df)
                     st.success("✅ Extraction Complete!")
             except Exception as e:
-                st.error(f"Error during extraction: {e}")
+                st.error(f"Error: {e}")
+
+# --- NEW FEATURE: MANUAL ADD BUTTONS ---
+st.markdown("---")
+st.subheader("➕ Manual Entry Options")
+col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+
+with col_btn1:
+    if st.button("➕ Add Blank Journey"):
+        new_row = pd.DataFrame([{
+            "Departure_Date": date.today(), "Departure_Time": time(9, 0),
+            "Arrival_Date": date.today(), "Arrival_Time": time(10, 0),
+            "KM": 0.0, "Mode_of_Travel": "Bus"
+        }])
+        st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], new_row], ignore_index=True)
+        st.rerun()
+
+with col_btn2:
+    if st.button("🏨 Add Stay / Halt"):
+        new_row = pd.DataFrame([{
+            "Departure_Place": "STAY / HALT",
+            "Departure_Date": date.today(), "Departure_Time": time(0, 0),
+            "Arrival_Place": "STAY / HALT",
+            "Arrival_Date": date.today(), "Arrival_Time": time(23, 59),
+            "Mode_of_Travel": "STAY", "KM": 0.0, "Purpose": "Night Halt"
+        }])
+        st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], new_row], ignore_index=True)
+        st.rerun()
+
+with col_btn3:
+    if st.button("🧹 Clear All Rows"):
+        st.session_state['raw_diary_df'] = st.session_state['raw_diary_df'].iloc[0:0]
+        st.rerun()
 
 # --- PART B: EDIT ---
-if 'raw_diary_df' in st.session_state:
+if not st.session_state['raw_diary_df'].empty:
     st.subheader("2. Review & Edit extracted Diary")
     
-    # Updated display sequence: KM is column 11, Purpose is column 18
     display_order = [
         "Departure_Place", "Departure_Date", "Departure_Time",
         "Arrival_Place", "Arrival_Date", "Arrival_Time",
@@ -124,11 +152,10 @@ if 'raw_diary_df' in st.session_state:
     ]
     
     df_to_edit = st.session_state['raw_diary_df']
+    # Ensure all columns exist
     for c in display_order: 
-        if c not in df_to_edit.columns: 
-            df_to_edit[c] = None
+        if c not in df_to_edit.columns: df_to_edit[c] = None
     
-    # Data editor configuration with custom column numbering
     edited_df = st.data_editor(
         df_to_edit[display_order],
         num_rows="dynamic",
@@ -147,11 +174,10 @@ if 'raw_diary_df' in st.session_state:
         }
      )
     
-    st.session_state['final_tour_diary'] = edited_df
+    # Sync edited data back to session state
+    st.session_state['raw_diary_df'] = edited_df
     
     st.markdown("---")
-    if st.button("✅ Confirm & Go to Calc"):
+    if st.button("✅ Confirm & Go to Calculation"):
         st.session_state['final_tour_diary'] = edited_df
-        # Make sure your next page is named EXACTLY like this:
         st.switch_page("pages/2_TA_Calculation.py")
-
