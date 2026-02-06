@@ -1,12 +1,16 @@
 import streamlit as st
 import utils
 import os
+import importlib 
 
-st.set_page_config(page_title="Settings", layout="wide")
+# --- FIX: Force reload utils to recognize new functions ---
+importlib.reload(utils) 
+# ----------------------------------------------------------
+
 st.title("⚙️ Settings & Rules")
 
 # ==========================================
-# SECTION 1: API CONFIGURATION (Restored)
+# SECTION 1: API CONFIGURATION
 # ==========================================
 st.subheader("1. AI Configuration")
 api_key = st.text_input(
@@ -23,23 +27,31 @@ if api_key:
 st.markdown("---")
 
 # ==========================================
-# SECTION 2: PERMANENT RULES (Fixed Error)
+# SECTION 2: PERMANENT RULES
 # ==========================================
 st.subheader("2. Rules, Statutes & Circulars")
 st.markdown("*Upload documents here to be saved permanently for all future calculations.*")
 
-# accept_multiple_files=True means this returns a LIST of files
-uploaded_rules = st.file_uploader("Upload New Regulation (PDF)", type=['pdf'], accept_multiple_files=True)
+# This handles both Single File AND Multiple Files to prevent errors
+uploaded_files = st.file_uploader(
+    "Upload New Regulation (PDF)", 
+    type=['pdf'], 
+    accept_multiple_files=True # Safer to allow multiple, we handle it below
+)
 
-if uploaded_rules:
-    if st.button("Save Rules Permanently"):
+if uploaded_files:
+    if st.button("Save Rule Permanently"):
         # We loop through the list to save them one by one
-        for rule_file in uploaded_rules:
-            path = utils.save_permanent_rule(rule_file)
-            if path:
-                st.success(f"Saved: {rule_file.name}")
+        for rule_file in uploaded_files:
+            # Check if utils actually has the function (Double Safety)
+            if hasattr(utils, 'save_permanent_rule'):
+                path = utils.save_permanent_rule(rule_file)
+                if path:
+                    st.success(f"Saved: {rule_file.name}")
+            else:
+                st.error("Error: utils.py is not updated. Please reboot the app.")
         
-        # Refresh the list to show the new files immediately
+        # Refresh to show new files
         st.rerun()
 
 # Display currently saved rules
