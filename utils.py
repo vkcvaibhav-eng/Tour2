@@ -28,7 +28,7 @@ def call_gemini_extraction(api_key, file_paths, prompt):
             return f'{{"error": "File upload failed: {str(e)}"}}'
 
     # Configure Model
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    model = genai.GenerativeModel(model_name="gemini-3-flash-preview")
 
     # Generate Content
     try:
@@ -152,3 +152,4 @@ def create_complex_claim_form(diary_df, ta_df, da_df):
     final_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     return doc
+
