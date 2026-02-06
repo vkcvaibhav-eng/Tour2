@@ -168,7 +168,26 @@ edited_ta = st.data_editor(
     }
 )
 
-# FIXED CALCULATION LOGIC (Using the variables to ensure names match)
+# Create a copy to ensure we aren't working on a fragmented view
+df_final = edited_ta.copy()
+
+# Ensure the column exists before calling it (The Fix for KeyError)
+if COL9 in df_final.columns:
+    # Use to_numeric to prevent errors if the user typed text in a number box
+    df_final[COL10] = pd.to_numeric(df_final[COL9], errors='coerce').fillna(0)
+    
+    # Calculate Total safely
+    km = pd.to_numeric(df_final[COL11], errors='coerce').fillna(0)
+    rate = pd.to_numeric(df_final[COL12], errors='coerce').fillna(0)
+    df_final[COL13] = df_final[COL10] + (km * rate)
+    
+    # Update the session state with the calculated values
+    st.session_state['ta_rearranged_df'] = df_final
+else:
+    # If for some reason the column is missing, force a reset
+    st.warning("Table columns out of sync. Resetting...")
+    del st.session_state['ta_rearranged_df']
+    st.rerun()# FIXED CALCULATION LOGIC (Using the variables to ensure names match)
 edited_ta[COL10] = edited_ta[COL9]
 edited_ta[COL13] = edited_ta[COL10] + (edited_ta[COL11] * edited_ta[COL12])
 st.session_state['ta_rearranged_df'] = edited_ta
@@ -200,3 +219,4 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
