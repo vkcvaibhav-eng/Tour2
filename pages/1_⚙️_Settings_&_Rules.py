@@ -1,33 +1,17 @@
 import streamlit as st
-import utils
-import os
+import utils 
 
 st.title("⚙️ Settings & Rules")
 
-# Section 1: Gemini API Key
-st.subheader("1. AI Configuration")
-api_key = st.text_input("Enter Gemini API Key", type="password", help="Required for extracting data from documents.")
-if api_key:
-    st.session_state['gemini_api_key'] = api_key
-    st.success("API Key saved for this session.")
+# ... existing API key code ...
 
-st.markdown("---")
+st.subheader("Manage Rules & Statutes")
+# Note: accept_multiple_files=True returns a LIST
+uploaded_rules = st.file_uploader("Upload PDF Rules", type="pdf", accept_multiple_files=True)
 
-# Section 2: Permanent Rules Storage
-st.subheader("2. Rules, Statutes & Circulars")
-st.markdown("*Upload documents here to be saved permanently for all future calculations.*")
-
-uploaded_rule = st.file_uploader("Upload New Regulation (PDF)", type=['pdf'])
-if uploaded_rule:
-    if st.button("Save Rule Permanently"):
-        path = utils.save_permanent_rule(uploaded_rule)
-        st.success(f"Saved: {uploaded_rule.name}")
-
-# Display currently saved rules
-st.write("### 📂 Currently Saved Rules:")
-saved_files = utils.list_saved_rules()
-if saved_files:
-    for f in saved_files:
-        st.text(f"• {f}")
-else:
-    st.warning("No permanent rules saved yet.")
+if uploaded_rules:
+    for rule_file in uploaded_rules:
+        # We loop through the list and save one by one
+        path = utils.save_permanent_rule(rule_file)
+        if path:
+            st.success(f"Saved: {rule_file.name}")
