@@ -3,78 +3,37 @@ import pandas as pd
 from datetime import datetime
 
 # --- CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Step 2: TA Calculation (Automated)")
+st.set_page_config(layout="wide", page_title="Step 2: TA Calculation")
 
-# --- USER CONSTANTS (Extracted from your Salary Slip & Rules) ---
-USER_BASIC_PAY = 79800.0  # From Salary Slip
-PAY_LEVEL = 11            # Implied from 79800 scale (Level 11 starts ~67700)
-# Gujarat Govt Rule 2024 / University Norms for Own Car
-MILEAGE_RATE_CAR = 11.0   # Standard Rate for Petrol Car
-# DA Rates for Level 11 (Ref: Revised TD/DA 2024)
-DA_RATES = {
-    "Ordinary": {"X": 900, "Y": 700, "Z": 400},
-    "Hotel":    {"X": 2000, "Y": 1600, "Z": 900}
-}
-
-def get_da_rate(city_class="Z", stay_type="Ordinary"):
-    """Returns the full DA rate based on Pay Level 11 rules."""
-    return DA_RATES.get(stay_type, DA_RATES["Ordinary"]).get(city_class, 400)
-
-def calculate_allowance_logic(row):
+# --- HELPER: LOGIC TO PRE-FILL (BUT NOT FORCE) VALUES ---
+def calculate_initial_values(row):
     """
-    The 'Brain' of the script. 
-    Calculates Columns 7-13 automatically based on Mode and Time.
+    Sets up the initial columns (7-13) based on the Diary.
+    Unlike the previous version, this does NOT force values to zero.
+    It just provides a starting point that you can edit.
     """
-    # 1. Parse Times
-    try:
-        fmt = "%d/%m/%Y %H:%M"
-        dep_str = f"{row['Departure Date']} {row['Departure Time']}"
-        arr_str = f"{row['Arrival Date']} {row['Arrival Time']}"
-        t1 = datetime.strptime(dep_str, fmt)
-        t2 = datetime.strptime(arr_str, fmt)
-        duration_hrs = (t2 - t1).total_seconds() / 3600.0
-    except:
-        duration_hrs = 0.0
-
-    # 2. Mileage Logic (Cols 11, 12, 13)
-    # If Mode is Private Vehicle, auto-calc mileage
+    # 1. Get existing values or defaults
     mode = str(row.get("Mode of Travel", "")).lower()
     km = pd.to_numeric(row.get("KM", 0), errors='coerce')
     if pd.isna(km): km = 0.0
-
-    rate_per_km = 0.0
-    mileage_total = 0.0
-    ticket_price = pd.to_numeric(row.get("Ticket_Price_Rate", 0), errors='coerce')
-    if pd.isna(ticket_price): ticket_price = 0.0
     
-    # Logic: Private Vehicle gets Mileage, Public Transport gets Ticket
+    # Default Class based on Mode string
     if "private" in mode or "car" in mode:
-        rate_per_km = MILEAGE_RATE_CAR
-        mileage_total = km * rate_per_km
-        # Clear ticket price if user accidentally entered it for car
-        ticket_price = 0.0
-        class_vehicle = "Own Car (Petrol)"
-    elif "bus" in mode or "rail" in mode:
-        rate_per_km = 0.0
-        mileage_total = 0.0
-        # Ticket price is manual, but we ensure mileage is 0
-        class_vehicle = "Public Transport"
+        class_vehicle = "Own Car / Pvt"
+    elif "bus" in mode:
+        class_vehicle = "Bus"
+    elif "rail" in mode or "train" in mode:
+        class_vehicle = "Rail"
     else:
         class_vehicle = "Other"
 
-    # 3. DA Calculation Logic (Hidden Intelligence)
-    # Rules: <6 hr = 30%, 6-12 hr = 50%, >12 hr = 100%
-    # We default to 'Z' class city unless specified.
-    full_da_rate = get_da_rate("Z", "Ordinary") 
+    # We default the Rate to 0 so you can enter it manually 
+    # (since you use equivalent fare or variable rates)
+    rate_per_km = 0.0
     
-    if duration_hrs < 6:
-        da_percentage = 0.3
-    elif duration_hrs < 12:
-        da_percentage = 0.5
-    else:
-        da_percentage = 1.0
-        
-    da_amount = full_da_rate * da_percentage
+    # Initial Calculation
+    mileage_total = km * rate_per_km
+    ticket_price = 0.0 # Default to 0, user enters manual amount
 
     return pd.Series([
         class_vehicle,   # Col 8
@@ -82,15 +41,12 @@ def calculate_allowance_logic(row):
         ticket_price,    # Col 10 (Total)
         km,              # Col 11
         rate_per_km,     # Col 12
-        mileage_total,   # Col 13
-        da_amount        # Extra: Auto-calc DA
+        mileage_total    # Col 13
     ])
-
 
 # --- MAIN APP UI ---
 
-st.title("🧮 Step 2: TA Calculation (Automated)")
-st.caption(f"User Profile: Level {PAY_LEVEL} | Basic: ₹{USER_BASIC_PAY} | Mileage Rate: ₹{MILEAGE_RATE_CAR}/km")
+st.title("🧮 Step 2: TA Calculation (Manual Entry)")
 
 # Check if Step 1 (Diary) was completed
 if 'final_tour_diary' not in st.session_state:
@@ -102,21 +58,20 @@ diary_df = st.session_state['final_tour_diary'].copy()
 
 # Initialize TA Calculation DataFrame if not exists
 if 'ta_calculation_df' not in st.session_state:
-    # --- INTELLIGENT INITIALIZATION ---
-    # We apply the logic rules immediately upon loading
-    processed_data = diary_df.apply(lambda row: calculate_allowance_logic(row), axis=1)
+    # Generate the initial columns (7-13)
+    processed_data = diary_df.apply(lambda row: calculate_initial_values(row), axis=1)
     processed_data.columns = [
         "Class_of_Travel", "Ticket_Price_Rate", "Actual_Ticket_Amount", 
-        "Kilometer", "Rate_per_KM", "Mileage_Total", "Calculated_DA"
+        "Kilometer", "Rate_per_KM", "Mileage_Total"
     ]
     
-    # Combine original diary with calculated columns
+    # Combine original diary with new columns
     st.session_state['ta_calculation_df'] = pd.concat([diary_df, processed_data], axis=1)
 
 # Working DF
 df = st.session_state['ta_calculation_df']
 
-# --- SECTION 1: UPLOAD EVIDENCE & RULES ---
+# --- SECTION 1: UPLOAD EVIDENCE ---
 st.subheader("1. Upload TA Documents")
 col1, col2 = st.columns(2)
 with col1:
@@ -124,28 +79,26 @@ with col1:
 with col2:
     ta_rules = st.file_uploader("Upload TA Rules/Statutes", accept_multiple_files=True, key="ta_rules")
 
-if st.button("🔄 Recalculate Rules"):
-    # Re-apply the logic engine
-    processed_data = df.apply(lambda row: calculate_allowance_logic(row), axis=1)
-    # Update only the calculated columns
-    df.update(processed_data)
-    st.session_state['ta_calculation_df'] = df
-    st.success("Rules re-applied based on 2024 Provisions!")
+if st.button("🔄 Reset Data"):
+    if 'ta_calculation_df' in st.session_state:
+        del st.session_state['ta_calculation_df']
     st.rerun()
 
 st.divider()
 
 # --- SECTION 2: DATA EDITOR (Cols 7-13) ---
 st.subheader("2. Review & Edit Calculations")
-st.info("💡 Columns 8-13 have been auto-calculated based on your Salary Level & Gujarat Govt Rules.")
+st.info("💡 You can now manually edit Rates, KMs, and Ticket Amounts.")
 
+# We use column_config to format numbers, but we leave 'disabled=False' (default)
+# so you can edit the values.
 edited_ta = st.data_editor(
     df,
     key="ta_editor",
     use_container_width=True,
     num_rows="dynamic",
     column_config={
-        # Freezing Diary Columns (1-6)
+        # Freezing Diary Columns (1-6) - these come from Step 1
         "Departure Place": st.column_config.TextColumn(disabled=True),
         "Departure Date": st.column_config.TextColumn(disabled=True),
         "Departure Time": st.column_config.TextColumn(disabled=True),
@@ -155,66 +108,61 @@ edited_ta = st.data_editor(
         "Mode of Travel": st.column_config.TextColumn(disabled=True),
         "Purpose": st.column_config.TextColumn(disabled=True),
 
-        # AUTOMATED COLUMNS (7-13)
+        # MANUAL EDIT COLUMNS (7-13)
         "Class_of_Travel": st.column_config.TextColumn(
             "8. Class / Vehicle",
-            help="Auto-detected: Own Car or Public Transport"
+            help="E.g., Own Car, Bus, Sleeper"
         ),
         
         "Ticket_Price_Rate": st.column_config.NumberColumn(
             "9. Rate/Fare (Rs.)", 
             format="₹ %.2f",
-            help="Enter Bus/Train Ticket Price here"
+            help="Enter the Ticket Price (or Equivalent Bus Fare)"
         ),
         
         "Actual_Ticket_Amount": st.column_config.NumberColumn(
             "10. Ticket Total", 
             format="₹ %.2f", 
-            disabled=True, # Auto-sum
-            help="Total Claimed for Ticket"
+            help="Total Claimed (Usually same as Rate/Fare)"
         ),
         
         "Kilometer": st.column_config.NumberColumn(
             "11. KM", 
             format="%.1f km",
-            help="Enter distance for Road Mileage"
+            help="Distance traveled"
         ),
 
         "Rate_per_KM": st.column_config.NumberColumn(
             "12. Rate/KM", 
             format="₹ %.2f",
-            disabled=True, # Locked to Rule
-            help=f"Fixed at ₹{MILEAGE_RATE_CAR} for Private Car (Level 11)"
+            help="Enter Manual Rate if applicable (e.g. 8.00 or 11.00)"
         ),
         
         "Mileage_Total": st.column_config.NumberColumn(
             "13. Mileage Total", 
             format="₹ %.2f", 
-            disabled=True, # Auto-calc
-            help="Calculated as KM * Rate"
-        ),
-        
-        "Calculated_DA": st.column_config.NumberColumn(
-            "Auto DA (Ref)",
-            format="₹ %.0f",
-            disabled=True,
-            help="System estimate of DA based on hours"
+            help="Calculate manually or enter KM * Rate"
         )
     }
 )
 
+# --- RE-CALCULATE TOTALS BASED ON USER EDITS ---
+# We re-calculate the totals row-by-row to ensure accuracy if you changed Rate or KM
+# If you prefer purely manual entry, you can comment these two lines out.
+edited_ta["Mileage_Total"] = edited_ta["Kilometer"] * edited_ta["Rate_per_KM"]
+# For tickets, we assume Total = Rate unless you manually changed Total. 
+# (Here we just trust the editor output for Ticket Total to allow manual overrides)
+
 # Save changes back to session state
 st.session_state['ta_calculation_df'] = edited_ta
 
-# --- TOTALS ---
+# --- GRAND TOTALS ---
 total_ticket = edited_ta["Actual_Ticket_Amount"].sum()
 total_mileage = edited_ta["Mileage_Total"].sum()
-total_da = edited_ta["Calculated_DA"].sum()
-grand_total = total_ticket + total_mileage + total_da
+grand_total = total_ticket + total_mileage
 
 st.divider()
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 c1.metric("Ticket Total", f"₹ {total_ticket:,.2f}")
 c2.metric("Mileage Total", f"₹ {total_mileage:,.2f}")
-c3.metric("Estimated DA", f"₹ {total_da:,.2f}")
-c4.metric("GRAND TOTAL", f"₹ {grand_total:,.2f}")
+c3.metric("GRAND TOTAL (TA)", f"₹ {grand_total:,.2f}")
