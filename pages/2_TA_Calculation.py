@@ -23,20 +23,21 @@ with col1:
 with col2:
     ta_rules = st.file_uploader("Upload TA Rules/Statutes", accept_multiple_files=True, key="ta_rules")
 
-if st.button("🔄 Apply Rules & Initialize Data"):
-    # This button triggers a refresh which runs the logic below
-    st.success("Data re-initialized based on Diary and Rules.")
+if st.button("🔄 Apply Rules & Reset Data"):
+    # This force-clears the old data to prevent conflicts
+    if 'ta_calculation_df' in st.session_state:
+        del st.session_state['ta_calculation_df']
+    st.success("Data reset! Logic re-applied.")
     st.rerun()
 
 st.divider()
 
 # =========================================================
-# SECTION 2: CALCULATION LOGIC (Merged Features)
+# SECTION 2: INITIALIZATION & SELF-HEALING (FIX FOR KEYERROR)
 # =========================================================
 
-# --- HELPER: RETRIEVE KM FROM ORIGINAL RAW DATA ---
+# --- HELPER: RETRIEVE KM FROM RAW DATA ---
 def try_get_km_from_raw(dep_date, dep_place):
-    """Looks back at raw AI data to find KM if lost."""
     raw_data = st.session_state.get('extracted_data', {})
     if isinstance(raw_data, str):
         try:
@@ -57,46 +58,61 @@ def try_get_km_from_raw(dep_date, dep_place):
                     except: pass
     return 0.0
 
-# --- INITIALIZE DATAFRAME (Columns 1 to 13) ---
+# 1. Initialize if missing
 if 'ta_calculation_df' not in st.session_state:
-    # 1. Copy ALL columns from Diary (Cols 1-7)
-    # Ensure we have the specific columns needed for display
+    # Prepare basic columns 1-7 from Diary
     req_cols = ["Departure_Place", "Departure_Date", "Departure_Time", 
                 "Arrival_Place", "Arrival_Date", "Arrival_Time", 
                 "Mode_of_Travel", "Purpose"]
-    
-    # Fill missing cols if any
     for c in req_cols:
         if c not in diary_df.columns: diary_df[c] = None
-        
-    ta_df = diary_df.copy()
     
-    # 2. Add TA Specific Columns (Cols 8-13)
-    # Col 8: Class / Vehicle No
-    ta_df["Class_of_Travel"] = ta_df.apply(
-        lambda x: "Govt. Vehicle" if "University" in str(x["Mode_of_Travel"]) or "Govt" in str(x["Mode_of_Travel"]) else "Ordinary", 
-        axis=1
-    )
-    ta_df["Ticket_Price_Rate"] = 0.0      # Col 9
-    ta_df["Actual_Ticket_Amount"] = 0.0   # Col 10
-    ta_df["Kilometer"] = 0.0              # Col 11
-    ta_df["Rate_per_KM"] = 0.0            # Col 12
-    ta_df["Mileage_Total"] = 0.0          # Col 13
-
-    # 3. Intelligent Extraction Logic (Auto-Fill KM)
-    for idx, row in ta_df.iterrows():
-        mode = str(row["Mode_of_Travel"]).lower()
-        if "private" in mode or "university" in mode or "car" in mode:
-            # Check if KM exists in diary
-            if "KM" in diary_df.columns and pd.notnull(diary_df.loc[idx, "KM"]):
-                try: ta_df.at[idx, "Kilometer"] = float(diary_df.loc[idx, "KM"])
-                except: pass
-            
-            # If not, look back at raw data
-            if ta_df.at[idx, "Kilometer"] == 0:
-                ta_df.at[idx, "Kilometer"] = try_get_km_from_raw(row["Departure_Date"], row["Departure_Place"])
-
+    ta_df = diary_df.copy()
     st.session_state['ta_calculation_df'] = ta_df
+
+# 2. SELF-HEALING: Fix Columns if they are missing or named differently
+# This prevents the KeyError "Ticket_Price_Rate"
+df = st.session_state['ta_calculation_df']
+
+# Rename old columns to new names if they exist
+if "Ticket_Price" in df.columns and "Ticket_Price_Rate" not in df.columns:
+    df = df.rename(columns={"Ticket_Price": "Ticket_Price_Rate"})
+if "Total_Amount" in df.columns and "Actual_Ticket_Amount" not in df.columns:
+    df = df.rename(columns={"Total_Amount": "Actual_Ticket_Amount"})
+
+# Ensure all 13 columns exist
+required_cols = {
+    "Class_of_Travel": "Ordinary",
+    "Ticket_Price_Rate": 0.0,
+    "Actual_Ticket_Amount": 0.0,
+    "Kilometer": 0.0,
+    "Rate_per_KM": 0.0,
+    "Mileage_Total": 0.0
+}
+
+for col, default_val in required_cols.items():
+    if col not in df.columns:
+        df[col] = default_val
+
+# Re-Apply Logic for Class/Vehicle
+df["Class_of_Travel"] = df.apply(
+    lambda x: "Govt. Vehicle" if "University" in str(x.get("Mode_of_Travel", "")) or "Govt" in str(x.get("Mode_of_Travel", "")) else x.get("Class_of_Travel", "Ordinary"), 
+    axis=1
+)
+
+# Intelligent KM Extraction (if still 0)
+for idx, row in df.iterrows():
+    mode = str(row.get("Mode_of_Travel", "")).lower()
+    if ("private" in mode or "university" in mode) and df.at[idx, "Kilometer"] == 0:
+        # Check diary original
+        if "KM" in diary_df.columns and pd.notnull(diary_df.loc[idx, "KM"]):
+             try: df.at[idx, "Kilometer"] = float(diary_df.loc[idx, "KM"])
+             except: pass
+        # Check raw AI data
+        if df.at[idx, "Kilometer"] == 0:
+             df.at[idx, "Kilometer"] = try_get_km_from_raw(row.get("Departure_Date"), row.get("Departure_Place"))
+
+st.session_state['ta_calculation_df'] = df
 
 # =========================================================
 # SECTION 3: SMART FILL SYSTEM
@@ -210,6 +226,11 @@ cols_1_to_13 = [
     "Rate_per_KM",                                          # 12
     "Mileage_Total"                                         # 13
 ]
+
+# Ensure cols exist before display (Double Check)
+for c in cols_1_to_13:
+    if c not in st.session_state['ta_calculation_df'].columns:
+        st.session_state['ta_calculation_df'][c] = None
 
 edited_ta = st.data_editor(
     st.session_state['ta_calculation_df'][cols_1_to_13],
