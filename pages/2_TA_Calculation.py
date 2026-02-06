@@ -124,28 +124,36 @@ if 'ta_rearranged_df' not in st.session_state:
     ta_df.columns = ALL_COLS
     st.session_state['ta_rearranged_df'] = ta_df
 
-# ==========================================
-# 🆕 NEW SECTION: MANUAL PRICE/KM UPDATE
+# # ==========================================
+# 🆕 CORRECTED SECTION: MANUAL PRICE/KM UPDATE
 # ==========================================
 st.subheader("2. Manual Update (If AI Missed Price)")
-with st.expander("Click here to manually set Price or KM for a journey"):
+with st.expander("Click here to manually set Price or KM for a specific journey"):
+    # Create a unique list of journeys (Date + From -> To) to prevent selecting wrong row
+    journey_options = st.session_state['ta_rearranged_df'].apply(
+        lambda x: f"{x[COL2]} | {x[COL1]} to {x[COL4]}", axis=1
+    ).tolist()
+    
     col_sel, col_val, col_km = st.columns([2, 1, 1])
     
-    # List journey destinations for the user to pick
-    journey_list = st.session_state['ta_rearranged_df'][COL4].tolist()
-    selected_journey = col_sel.selectbox("Select Destination to Update", journey_list)
-    
-    new_price = col_val.number_input("Enter Manual Price (Col 9)", min_value=0.0, step=10.0)
-    new_km = col_km.number_input("Enter Manual KM (Col 11)", min_value=0.0, step=1.0)
+    selected_label = col_sel.selectbox("Select Specific Journey to Update", journey_options)
+    new_price = col_val.number_input("Enter Manual Price (Col 9)", min_value=0.0, step=10.0, key="man_pr")
+    new_km = col_km.number_input("Enter Manual KM (Col 11)", min_value=0.0, step=1.0, key="man_km")
     
     if st.button("✅ Apply Manual Update to Table"):
-        # Update the specific row in session state
-        idx = st.session_state['ta_rearranged_df'].index[st.session_state['ta_rearranged_df'][COL4] == selected_journey].tolist()[0]
+        # Find the exact index based on the label we created
+        idx = journey_options.index(selected_label)
+        
+        # Update the values in the session state dataframe
         if new_price > 0:
             st.session_state['ta_rearranged_df'].at[idx, COL9] = new_price
+            # Also update the calculated column 10 immediately
+            st.session_state['ta_rearranged_df'].at[idx, COL10] = new_price
+            
         if new_km > 0:
             st.session_state['ta_rearranged_df'].at[idx, COL11] = new_km
-        st.success(f"Updated journey to {selected_journey}!")
+            
+        st.success(f"Updated journey: {selected_label}")
         st.rerun()
 
 # ==========================================
@@ -198,3 +206,4 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
