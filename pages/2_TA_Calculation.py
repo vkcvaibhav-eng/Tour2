@@ -59,7 +59,7 @@ def extract_data_from_documents(uploaded_files, doc_type="ticket"):
                 [{"date": "25/12/2025", "mode": "Bus", "amount": 540, "km": 0}]
                 """
 
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3-flash-preview')
             response = model.generate_content([prompt, image_parts[0]])
             
             # Clean and parse JSON
@@ -287,3 +287,4 @@ c1, c2, c3 = st.columns(3)
 c1.metric("🎫 Ticket Total", f"₹ {total_ticket:,.2f}")
 c2.metric("🚗 Mileage Total", f"₹ {total_mileage:,.2f}")
 c3.metric("💰 GRAND TOTAL", f"₹ {grand_total:,.2f}")
+
