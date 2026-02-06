@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import json
 
 st.set_page_config(layout="wide")
 st.title("🧮 TA Calculation (Transport Allowance)")
@@ -15,11 +16,52 @@ diary_df = st.session_state['final_tour_diary']
 st.info("Step 1: Calculate your Transport Allowance (Tickets, Private Car, Auto/Taxi).")
 
 # =========================================================
+# HELPER: RETRIEVE KM FROM ORIGINAL RAW DATA
+# =========================================================
+def try_get_km_from_raw(dep_date, dep_place):
+    """
+    Looks back at the raw Gemini JSON to find 'KM' or 'Distance' 
+    if it was lost during the Page 3 editing process.
+    """
+    raw_data = st.session_state.get('extracted_data', {})
+    
+    # 1. Parse JSON if it's a string
+    if isinstance(raw_data, str):
+        try:
+            if "```json" in raw_data:
+                raw_data = json.loads(raw_data.split("```json")[1].split("```")[0])
+            elif "```" in raw_data:
+                raw_data = json.loads(raw_data.split("```")[1].split("```")[0])
+            else:
+                raw_data = json.loads(raw_data)
+        except:
+            return 0.0
+
+    # 2. Search for the row in the raw list
+    if isinstance(raw_data, dict):
+        tour_list = raw_data.get("tour_diary", [])
+        for item in tour_list:
+            # Simple match attempt
+            raw_place = str(item.get("Departure_Place", "")).strip().lower()
+            target_place = str(dep_place).strip().lower()
+            
+            # If dates match (loosely) and place matches
+            if raw_place in target_place or target_place in raw_place:
+                # Try to extract KM
+                val = item.get("KM") or item.get("Distance") or item.get("Kilometer")
+                if val:
+                    try:
+                        return float(str(val).replace("km", "").strip())
+                    except:
+                        pass
+    return 0.0
+
+# =========================================================
 # INITIALIZE STRUCTURE & EXTRACT KM
 # =========================================================
 if 'ta_calculation_df' not in st.session_state:
     # Create a new structure based on the diary
-    ta_df = diary_df[["Departure_Place", "Arrival_Place", "Mode_of_Travel"]].copy()
+    ta_df = diary_df[["Departure_Place", "Arrival_Place", "Mode_of_Travel", "Departure_Date"]].copy()
     
     # --- 1. SET CLASS / VEHICLE NO ---
     ta_df["Class_of_Travel"] = ta_df.apply(
@@ -34,20 +76,23 @@ if 'ta_calculation_df' not in st.session_state:
     ta_df["Rate_per_KM"] = 0.0            # Col 12 (Only for Auto)
     ta_df["Mileage_Total"] = 0.0          # Col 13 (Calculated)
 
-    # --- 3. DIRECT EXTRACT: KM FROM DIARY ---
-    # If the Tour Diary (Page 3) has a "KM" or "Distance" column, map it directly
-    # for Private & University Vehicles.
-    source_km_col = None
-    if "KM" in diary_df.columns:
-        source_km_col = "KM"
-    elif "Distance" in diary_df.columns:
-        source_km_col = "Distance"
-    
-    if source_km_col:
-        # Filter for Private or University Vehicles
-        mask_road = ta_df["Mode_of_Travel"].str.contains("Private|University|Govt|Car|Jeep", case=False, na=False)
-        # Copy values safely
-        ta_df.loc[mask_road, "Kilometer"] = diary_df.loc[mask_road, source_km_col]
+    # --- 3. INTELLIGENT KM EXTRACTION ---
+    for idx, row in ta_df.iterrows():
+        mode = str(row["Mode_of_Travel"]).lower()
+        
+        # Only extract KM for Private/Uni vehicles (as per rule)
+        if "private" in mode or "university" in mode or "car" in mode or "jeep" in mode:
+            # First, check if 'KM' exists in the diary dataframe itself
+            if "KM" in diary_df.columns and pd.notnull(diary_df.loc[idx, "KM"]):
+                try:
+                    ta_df.at[idx, "Kilometer"] = float(diary_df.loc[idx, "KM"])
+                except:
+                    pass
+            
+            # If still 0, look back at Raw Gemini Data
+            if ta_df.at[idx, "Kilometer"] == 0:
+                extracted_km = try_get_km_from_raw(row["Departure_Date"], row["Departure_Place"])
+                ta_df.at[idx, "Kilometer"] = extracted_km
 
     st.session_state['ta_calculation_df'] = ta_df
 
@@ -58,17 +103,16 @@ df = st.session_state['ta_calculation_df']
 
 # --- Identify Missing Information ---
 
-# A. Private Car: Needs 'Rate' (Bus Fare) if 0. Needs 'KM' if 0.
+# A. Private Car: Needs 'Fare' (Bus Equivalent) if 0. (KM should be filled by extraction, but ask if 0)
 pvt_mask = df["Mode_of_Travel"].str.contains("Private|Car|Jeep", case=False, na=False)
 missing_pvt_fare = df[pvt_mask & (df["Ticket_Price_Rate"] == 0)]
-missing_pvt_km = df[pvt_mask & (df["Kilometer"] == 0)]
+missing_pvt_km = df[pvt_mask & (df["Kilometer"] == 0)] # Fallback if extraction failed
 
-# B. Auto Rickshaw: Needs 'KM' and 'Rate' if 0.
+# B. Auto Rickshaw: Needs 'KM' (Column 11) and 'Rate' (Column 12)
 auto_mask = df["Mode_of_Travel"].str.contains("Auto|Rickshaw", case=False, na=False)
 missing_auto_data = df[auto_mask & ((df["Kilometer"] == 0) | (df["Rate_per_KM"] == 0))]
 
-# C. Public Transport (Bus/Rail/Flight/Taxi): Needs 'Fare' if 0.
-# (KM is usually not required for claim, but we assume ticket price is needed)
+# C. Public Transport: Needs 'Fare' (Column 9)
 pub_mask = df["Mode_of_Travel"].str.contains("Bus|Rail|Train|Flight|Air|Taxi", case=False, na=False)
 missing_pub_fare = df[pub_mask & (df["Ticket_Price_Rate"] == 0)]
 
@@ -76,7 +120,7 @@ missing_pub_fare = df[pub_mask & (df["Ticket_Price_Rate"] == 0)]
 attention_needed = missing_pvt_fare.index.union(missing_pvt_km.index).union(missing_auto_data.index).union(missing_pub_fare.index)
 
 if not attention_needed.empty:
-    st.warning(f"⚠️ Found {len(attention_needed)} items needing manual input (Rates or Distances).")
+    st.warning(f"⚠️ Found {len(attention_needed)} items needing manual input.")
     
     with st.expander("📝 Smart Fill: Add Missing Fares & Distances", expanded=True):
         st.caption("Fill these details once, and I will update the table automatically.")
@@ -113,7 +157,8 @@ if not attention_needed.empty:
             # INPUT 1: DISTANCE (Col 11)
             km_val = 0.0
             with c2:
-                # Ask KM for Private Car or Auto if missing
+                # Private/Uni: Should have been extracted. If 0, ask.
+                # Auto: Always ask.
                 if (is_private or is_auto) and not has_km:
                     km_val = st.number_input(f"Distance (KM)", min_value=0.0, key=f"km_{i}")
                 elif has_km:
@@ -125,7 +170,7 @@ if not attention_needed.empty:
             fare_val = 0.0
             rate_km_val = 0.0
             with c3:
-                # Private Car: Ask for Bus Fare Equivalent (Col 9)
+                # Private Car: Ask for Bus Fare Equivalent (Col 9) if Fare Enquiry missing
                 if is_private and not has_fare:
                     fare_val = st.number_input(f"Bus Fare Equiv.", min_value=0.0, key=f"fare_{i}")
                 
@@ -161,16 +206,17 @@ for index, row in st.session_state['ta_calculation_df'].iterrows():
     
     # 1. UNIVERSITY / GOVT VEHICLE
     if "university" in mode or ("govt" in mode and "private" not in mode):
-         # KM is kept (if extracted), but Money is 0
+         # KM is extracted for record, but Money is 0
          st.session_state['ta_calculation_df'].at[index, "Actual_Ticket_Amount"] = 0.0
          st.session_state['ta_calculation_df'].at[index, "Mileage_Total"] = 0.0
          st.session_state['ta_calculation_df'].at[index, "Ticket_Price_Rate"] = 0.0
     
-    # 2. PRIVATE VEHICLE
+    # 2. PRIVATE VEHICLE (Car/Jeep)
     elif "private" in mode or "car" in mode or "jeep" in mode:
-        # Col 10 (Total) = Col 9 (Bus Fare)
+        # Col 10 (Total) = Col 9 (Bus Fare Equivalent)
+        # Note: Even though we have KM (Col 11), we DO NOT multiply by Rate/KM.
+        # We assume Private Vehicle claim is restricted to Bus Fare (Fare Enquiry).
         st.session_state['ta_calculation_df'].at[index, "Actual_Ticket_Amount"] = row["Ticket_Price_Rate"]
-        # Col 13 (Mileage) = 0 (We don't pay mileage, we pay bus fare)
         st.session_state['ta_calculation_df'].at[index, "Mileage_Total"] = 0.0
         
     # 3. AUTO RICKSHAW
