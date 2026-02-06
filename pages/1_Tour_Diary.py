@@ -1,14 +1,3 @@
-Here is the fully integrated code. I have taken the **exact code structure you provided** (Upload & Extract on the same page) and added all the requested features:
-
-1. **Manual Entry Tabs:** "Add Journey" and "Add Stay" forms.
-2. **Smart Mode Selection:** Dropdown for standard modes + Text input for University Vehicle Numbers.
-3. **Auto-Sorting:** Automatically arranges rows by Date/Time.
-4. **Column Arrangement:** 1. Place ➝ 2. Date ➝ 3. Time (as per your previous request).
-5. **Robust Error Handling:** Prevents crashes when mixing manual and AI data.
-
-### **Copy & Paste this into `3_🗓️_Tour_Diary.py**`
-
-```python
 import streamlit as st
 import pandas as pd
 import utils
@@ -258,6 +247,5 @@ if st.session_state.get('diary_uploaded') or 'raw_diary_df' in st.session_state:
     st.markdown("---")
     if st.button("✅ Confirm & Go to Calc"):
         st.session_state['final_tour_diary'] = edited_df
+        # Make sure your next page is named EXACTLY like this:
         st.switch_page("pages/2_🧮_TA_Calculation.py")
-
-```
