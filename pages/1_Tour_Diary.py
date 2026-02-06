@@ -145,8 +145,13 @@ if 'raw_diary_df' in st.session_state:
             "KM": st.column_config.NumberColumn("11. KM", format="%.1f"),
             "Purpose": st.column_config.TextColumn("18. Purpose of Journey"),
         }
-    )
+     )
+    
+    st.session_state['final_tour_diary'] = edited_df
+    
+    st.markdown("---")
+    if st.button("✅ Confirm & Go to Calc"):
+        st.session_state['final_tour_diary'] = edited_df
+        # Make sure your next page is named EXACTLY like this:
+        st.switch_page("pages/2_TA_Calculation.py")
 
-    if st.button("💾 Save & Continue"):
-        st.session_state['tour_diary_df'] = edited_df
-        st.success("Tour diary data saved! You can now proceed to the next step.")
