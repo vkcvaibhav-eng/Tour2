@@ -77,7 +77,7 @@ def extract_data_from_documents(uploaded_files):
 def validate_against_rules(table_df, salary_file, rules_file):
     model = genai.GenerativeModel('gemini-1.5-flash')
     table_json = table_df.to_json(orient="records")
-    prompt = f"""Audit TA Claim Table with Salary Slip and TA Rules. Claim Table: {table_json}. If correct, start with 'VALIDATED'."""
+    prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
     response = model.generate_content([prompt, salary_file, rules_file])
     return response.text
 
@@ -102,44 +102,56 @@ if ticket_files and st.button("🤖 Extract & Merge Ticket Data"):
 
 st.divider()
 
+# Logic to generate table from diary
 def smart_calculation_logic(row):
     mode = str(row.get("Mode_of_Travel", "")).lower()
     diary_date = str(row.get("Departure_Date", ""))
-    
     km = pd.to_numeric(row.get("KM", 0), errors='coerce')
     if pd.isna(km) or km == 0:
         km = try_get_km_from_raw(diary_date, row.get("Departure_Place", ""))
-
     ticket_rate = 0.0
     travel_class = "2nd AC" if "rail" in mode else "Economy" if "flight" in mode else "Express"
-    
-    # AI EXTRACTION ATTEMPT
     if 'extracted_tickets' in st.session_state:
         for t in st.session_state['extracted_tickets']:
             if str(t.get('date')) in diary_date or diary_date in str(t.get('date')):
                 ticket_rate = float(t.get('amount', 0))
-                if t.get('km', 0) > 0: km = float(t.get('km'))
                 break
-
-    # 🛑 MANUAL UPDATE LOGIC FOR PRIVATE VEHICLE 🛑
-    # If it's a private vehicle and Gemini didn't find a price
-    if ("private" in mode or "own" in mode) and ticket_rate == 0.0:
-        st.sidebar.warning(f"⚠️ Private Vehicle detected for {diary_date}. Please manually enter the 'Bus Fare Equivalent' in Column 9.")
-
     rate_per_km = 15.0 if ("auto" in mode or "rickshaw" in mode) else 0.0
-    return pd.Series([
-        row.get("Departure_Place"), row.get("Departure_Date"), row.get("Departure_Time"),
-        row.get("Arrival_Place"), row.get("Arrival_Date"), row.get("Arrival_Time"),
-        row.get("Mode_of_Travel"), travel_class, ticket_rate, ticket_rate, km, rate_per_km, 0.0
-    ])
+    return pd.Series([row.get("Departure_Place"), row.get("Departure_Date"), row.get("Departure_Time"), row.get("Arrival_Place"), row.get("Arrival_Date"), row.get("Arrival_Time"), row.get("Mode_of_Travel"), travel_class, ticket_rate, ticket_rate, km, rate_per_km, 0.0])
 
-# Initialize Table
 if 'ta_rearranged_df' not in st.session_state:
     ta_df = st.session_state['final_tour_diary'].apply(smart_calculation_logic, axis=1)
     ta_df.columns = ALL_COLS
     st.session_state['ta_rearranged_df'] = ta_df
 
-st.subheader("2. Review & Edit TA Table")
+# ==========================================
+# 🆕 NEW SECTION: MANUAL PRICE/KM UPDATE
+# ==========================================
+st.subheader("2. Manual Update (If AI Missed Price)")
+with st.expander("Click here to manually set Price or KM for a journey"):
+    col_sel, col_val, col_km = st.columns([2, 1, 1])
+    
+    # List journey destinations for the user to pick
+    journey_list = st.session_state['ta_rearranged_df'][COL4].tolist()
+    selected_journey = col_sel.selectbox("Select Destination to Update", journey_list)
+    
+    new_price = col_val.number_input("Enter Manual Price (Col 9)", min_value=0.0, step=10.0)
+    new_km = col_km.number_input("Enter Manual KM (Col 11)", min_value=0.0, step=1.0)
+    
+    if st.button("✅ Apply Manual Update to Table"):
+        # Update the specific row in session state
+        idx = st.session_state['ta_rearranged_df'].index[st.session_state['ta_rearranged_df'][COL4] == selected_journey].tolist()[0]
+        if new_price > 0:
+            st.session_state['ta_rearranged_df'].at[idx, COL9] = new_price
+        if new_km > 0:
+            st.session_state['ta_rearranged_df'].at[idx, COL11] = new_km
+        st.success(f"Updated journey to {selected_journey}!")
+        st.rerun()
+
+# ==========================================
+# 🧮 SECTION 3: REVIEW & EDIT TABLE
+# ==========================================
+st.subheader("3. Review & Edit TA Table")
 
 df_to_edit = st.session_state['ta_rearranged_df'].copy()
 df_to_edit[COL10] = pd.to_numeric(df_to_edit[COL9], errors='coerce').fillna(0)
@@ -157,34 +169,31 @@ edited_ta = st.data_editor(
     }
 )
 
-# SYNC EDITS & RECALCULATE
+# SYNC & RECALCULATE
 if COL9 in edited_ta.columns:
     edited_ta[COL10] = pd.to_numeric(edited_ta[COL9], errors='coerce').fillna(0)
     edited_ta[COL13] = edited_ta[COL10] + (pd.to_numeric(edited_ta[COL11], errors='coerce').fillna(0) * pd.to_numeric(edited_ta[COL12], errors='coerce').fillna(0))
     st.session_state['ta_rearranged_df'] = edited_ta
 
 # ==========================================
-# 📑 SECTION 2: AI RULE VALIDATION
+# 📑 SECTION 4: AI RULE VALIDATION
 # ==========================================
 st.divider()
-st.subheader("3. AI Policy Validation")
+st.subheader("4. AI Policy Validation (Rules & Salary Slip)")
 col_a, col_b = st.columns(2)
 with col_a: sal_up = st.file_uploader("Upload Salary Slip", type=['pdf','png','jpg'], key="salary_val")
 with col_b: rules_up = st.file_uploader("Upload TA Rules", type=['pdf','txt'], key="rules_val")
 
 if st.button("⚖️ Run AI Audit"):
     if not sal_up or not rules_up:
-        st.error("Please upload both documents.")
+        st.error("Please upload both documents for validation.")
     else:
         with st.spinner("Validating..."):
             report = validate_against_rules(edited_ta, sal_up, rules_up)
             if "VALIDATED" in report.upper():
-                st.success(report)
-                st.session_state['audit_passed'] = True
+                st.success(report); st.session_state['audit_passed'] = True
             else:
-                st.error("Policy Disparity Detected:")
-                st.info(report)
-                st.session_state['audit_passed'] = False
+                st.error("Policy Disparity Detected:"); st.info(report); st.session_state['audit_passed'] = False
 
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
