@@ -2,239 +2,288 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from PIL import Image
-import PyPDF2
 import io
 
-# --- CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Step 2: TA Calculation (AI Enhanced)")
+# ==========================================
+# ⚙️ CONFIGURATION & SETUP
+# ==========================================
+st.set_page_config(layout="wide", page_title="Step 2: TA Calculation (AI + Manual)")
 
-# --- HELPER: PDF/IMAGE TEXT EXTRACTOR ---
-def get_file_content(uploaded_file):
-    """Converts uploaded PDF or Image to a format Gemini can understand."""
-    try:
-        if uploaded_file.type == "application/pdf":
-            # Extract text from first few pages of PDF
-            pdf_reader = PyPDF2.PdfReader(uploaded_file)
-            text = ""
-            for page in pdf_reader.pages[:3]: # Limit to first 3 pages to save tokens
-                text += page.extract_text() + "\n"
-            return f"Document Content ({uploaded_file.name}):\n{text}"
-        else:
-            # For images, we can't easily extract text in pure Python without OCR, 
-            # so we will rely on Gemini Vision if passed as image, 
-            # but here we return a placeholder if using text-only model.
-            # *Ideally, pass the image object to Gemini Vision model.*
-            return f"[Image File: {uploaded_file.name} - Visual processing required]"
-    except Exception as e:
-        return f"Error reading {uploaded_file.name}: {e}"
+# Get API Key from Session State (set in Home/Step 1)
+api_key = st.session_state.get('gemini_api_key')
 
-# --- HELPER: GEMINI AI EXTRACTION ---
-def extract_ticket_data_with_gemini(api_key, diary_csv, file_contents):
-    """
-    Sends the Diary + Ticket text to Gemini to map costs to rows.
-    """
-    genai.configure(api_key=api_key)
-    # Use Flash for speed and long context (tickets)
-    model = genai.GenerativeModel('gemini-1.5-flash') 
-
-    prompt = f"""
-    You are an Accountant Assistant. I have a Tour Diary and a set of Ticket/Receipt texts.
-    
-    YOUR GOAL: Match the receipts to the Diary Rows and extract costs.
-    
-    ### TOUR DIARY DATA:
-    {diary_csv}
-    
-    ### UPLOADED RECEIPTS/DOCUMENTS:
-    {file_contents}
-    
-    ### INSTRUCTIONS:
-    1. Look at the 'Departure Date', 'Arrival Date', 'Departure Place', and 'Arrival Place' in the Diary.
-    2. Find a matching receipt in the Document Content.
-    3. If found, extract:
-       - 'ticket_amount': The cost of the ticket (Bus/Rail/Air).
-       - 'class_travel': The class (e.g., "Sleeper", "Economy", "Ac Bus").
-       - 'km': If the receipt shows distance (KM), extract it. Otherwise use 0.
-    4. Return a JSON Object indexed by the "Row Index" (0, 1, 2...) of the diary.
-    
-    ### OUTPUT FORMAT (JSON ONLY):
-    {{
-      "0": {{ "ticket_amount": 500, "class_travel": "Bus", "km": 0 }},
-      "2": {{ "ticket_amount": 1200, "class_travel": "Rail 2A", "km": 450 }}
-    }}
-    Only include rows where you found new data.
-    """
-    
-    try:
-        response = model.generate_content(prompt)
-        # Clean cleanup to get pure JSON
-        json_text = response.text.replace("```json", "").replace("```", "").strip()
-        return pd.read_json(io.StringIO(json_text), orient='index')
-    except Exception as e:
-        st.error(f"AI Extraction Failed: {e}")
-        return pd.DataFrame()
-
-# --- MAIN INITIALIZATION ---
-st.title("🧮 Step 2: TA Calculation (AI-Powered)")
-
-# 1. Check Login
-if not st.session_state.get('gemini_api_key'):
-    st.error("⚠️ Please login with your Gemini API Key on the Home Page.")
+if not api_key:
+    st.error("⚠️ Gemini API Key not found. Please set it in the Home page.")
     st.stop()
 
-# 2. Check Previous Step
-if 'final_tour_diary' not in st.session_state:
-    st.error("⚠️ Please complete 'Step 1: Tour Diary' first.")
-    st.stop()
+genai.configure(api_key=api_key)
 
-# 3. Load Diary Data (Cols 1-7, 11, 18)
-diary_df = st.session_state['final_tour_diary'].copy()
+# ==========================================
+# 🧠 AI ENGINE: DOCUMENT EXTRACTION
+# ==========================================
+def extract_data_from_documents(uploaded_files, doc_type="ticket"):
+    """
+    Sends uploaded files to Gemini to extract Date, Amount, Class, and KM.
+    """
+    if not uploaded_files:
+        return []
 
-# 4. Initialize TA Columns (8-13) if not present
-if 'ta_calculation_df' not in st.session_state:
-    # Create empty columns for the TA section
-    diary_df["Class_of_Travel"] = ""        # Col 8
-    diary_df["Ticket_Price_Rate"] = 0.0     # Col 9
-    diary_df["Actual_Ticket_Amount"] = 0.0  # Col 10
-    # KM (Col 11) might already exist from Step 1, ensure it's numeric
-    if "KM" not in diary_df.columns:
-        diary_df["KM"] = 0.0
-    diary_df["Rate_per_KM"] = 0.0           # Col 12
-    diary_df["Mileage_Total"] = 0.0         # Col 13
+    results = []
     
-    st.session_state['ta_calculation_df'] = diary_df
+    # Simple progress bar
+    progress_bar = st.progress(0)
+    
+    for i, file in enumerate(uploaded_files):
+        try:
+            # Prepare image for Gemini
+            image_data = file.getvalue()
+            image_parts = [{"mime_type": file.type, "data": image_data}]
+            
+            # Specific Prompt based on document type
+            if doc_type == "salary":
+                prompt = """
+                Analyze this Salary Slip. Extract the following:
+                - Basic Pay Amount
+                - Pay Level (or Grade Pay)
+                Return ONLY valid JSON: {"basic_pay": 12345, "pay_level": "Level 11"}
+                """
+            else: # Tickets
+                prompt = """
+                Analyze this Travel Ticket/Bill. Extract:
+                - Date of Travel (DD/MM/YYYY)
+                - Mode/Class (e.g., 'Rail', 'Bus', 'Flight', 'Taxi')
+                - Total Amount (numeric)
+                - Distance/KM (if mentioned, else 0)
+                
+                Return ONLY valid JSON: 
+                [{"date": "25/12/2025", "mode": "Bus", "amount": 540, "km": 0}]
+                """
 
-df = st.session_state['ta_calculation_df']
-
-# --- SECTION 1: UPLOADS & AI ACTION ---
-with st.expander("📂 Upload Proofs (Salary Slip, Tickets, Bills)", expanded=True):
-    col_up1, col_up2 = st.columns(2)
-    with col_up1:
-        salary_file = st.file_uploader("1. Salary Slip (For Pay Level)", type=["pdf", "jpg", "png"])
-        ticket_files = st.file_uploader("2. Travel Tickets (Bus/Rail/Air)", accept_multiple_files=True)
-    with col_up2:
-        st.info("💡 **AI Feature:** Upload your tickets and click the button below. Gemini will read the dates and prices and auto-fill columns 8, 9, and 10 for you!")
-        
-        if st.button("✨ Auto-Fill Amounts from Uploads", type="primary"):
-            if not ticket_files:
-                st.warning("Please upload ticket files first.")
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content([prompt, image_parts[0]])
+            
+            # Clean and parse JSON
+            text = response.text.strip()
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            
+            import json
+            data = json.loads(text)
+            
+            if isinstance(data, list):
+                results.extend(data)
             else:
-                with st.spinner("Gemini is reading your tickets..."):
-                    # 1. Prepare Text
-                    all_text = ""
-                    for f in ticket_files:
-                        all_text += get_file_content(f) + "\n---\n"
-                    
-                    # 2. Call AI
-                    updates_df = extract_ticket_data_with_gemini(
-                        st.session_state['gemini_api_key'], 
-                        df.to_csv(), 
-                        all_text
-                    )
-                    
-                    # 3. Update DataFrame
-                    if not updates_df.empty:
-                        for index, row in updates_df.iterrows():
-                            if index in df.index:
-                                df.at[index, "Ticket_Price_Rate"] = row.get('ticket_amount', 0)
-                                df.at[index, "Actual_Ticket_Amount"] = row.get('ticket_amount', 0)
-                                if row.get('class_travel'):
-                                    df.at[index, "Class_of_Travel"] = row.get('class_travel')
-                                # Update KM only if AI found a strictly better number (non-zero)
-                                if row.get('km', 0) > 0:
-                                    df.at[index, "KM"] = row.get('km')
-                        
-                        st.session_state['ta_calculation_df'] = df
-                        st.success("✅ Data extracted and filled! Review below.")
-                        st.rerun()
-                    else:
-                        st.warning("AI couldn't match specific tickets to dates. Please enter manually.")
+                results.append(data)
+                
+        except Exception as e:
+            st.warning(f"Could not read file {file.name}: {e}")
+        
+        progress_bar.progress((i + 1) / len(uploaded_files))
+        
+    progress_bar.empty()
+    return results
+
+# ==========================================
+# 📥 SECTION 1: UPLOADS & INTELLIGENCE
+# ==========================================
+st.title("🧮 Step 2: TA Calculation (Smart Extract)")
+st.info("Upload your documents below. Gemini will read the **Ticket Rates** and **KM** and auto-fill the table for you.")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("1. Upload Salary Slip")
+    salary_file = st.file_uploader("For Pay Level Validation", type=['png', 'jpg', 'jpeg', 'pdf'], key="sal_up")
+    
+    if salary_file and st.button("🔍 Analyze Salary Slip"):
+        with st.spinner("Reading Salary Slip..."):
+            data = extract_data_from_documents([salary_file], "salary")
+            if data:
+                st.session_state['user_salary_info'] = data[0]
+                st.success(f"Detected: Basic Pay ₹{data[0].get('basic_pay')} | Level: {data[0].get('pay_level')}")
+
+with col2:
+    st.subheader("2. Upload Tickets / Bills")
+    ticket_files = st.file_uploader("Train, Bus, Flight, Taxi Bills", accept_multiple_files=True, type=['png', 'jpg', 'jpeg', 'pdf'], key="tick_up")
+    
+    if ticket_files and st.button("🤖 Extract Ticket Data"):
+        with st.spinner("Gemini is reading your tickets..."):
+            extracted_tickets = extract_data_from_documents(ticket_files, "ticket")
+            st.session_state['extracted_tickets'] = extracted_tickets
+            st.success(f"Successfully extracted data from {len(extracted_tickets)} tickets!")
+            st.json(extracted_tickets, expanded=False)
 
 st.divider()
 
-# --- SECTION 2: DATA EDITOR (THE OLD CODE STRUCTURE) ---
-st.subheader("2. Detailed TA Calculation")
-st.markdown("Edit the **Rate**, **KM**, and **Ticket Amounts** manually below.")
+# ==========================================
+# 🗓️ SECTION 2: THE "OLD CODE" CALCULATOR
+# ==========================================
+st.header("3. Review & Edit Calculations")
 
-column_config = {
-    # --- FROZEN DIARY COLUMNS (1-7, 18) ---
-    "Departure Place": st.column_config.TextColumn("1. Dep. Place", disabled=True),
-    "Departure Date": st.column_config.TextColumn("2. Dep. Date", disabled=True),
-    "Departure Time": st.column_config.TextColumn("3. Dep. Time", disabled=True),
-    "Arrival Place": st.column_config.TextColumn("4. Arr. Place", disabled=True),
-    "Arrival Date": st.column_config.TextColumn("5. Arr. Date", disabled=True),
-    "Arrival Time": st.column_config.TextColumn("6. Arr. Time", disabled=True),
-    "Mode of Travel": st.column_config.TextColumn("7. Mode", disabled=True),
-    "Purpose": st.column_config.TextColumn("18. Purpose", disabled=True),
+# 1. Load Diary Data
+if 'final_tour_diary' not in st.session_state:
+    st.error("⚠️ Please complete Step 1 (Tour Diary) first.")
+    st.stop()
 
-    # --- EDITABLE TA COLUMNS (8-13) ---
-    "Class_of_Travel": st.column_config.TextColumn(
-        "8. Class / Vehicle",
-        help="e.g. Sleeper, AC Bus, Own Car"
-    ),
-    "Ticket_Price_Rate": st.column_config.NumberColumn(
-        "9. Ticket Price / Rate (Rs.)",
-        format="₹ %.2f",
-        help="Price written on the ticket"
-    ),
-    "Actual_Ticket_Amount": st.column_config.NumberColumn(
-        "10. Actual Ticket Total (Rs.)",
-        format="₹ %.2f",
-        help="Total amount claimed for this leg"
-    ),
-    "KM": st.column_config.NumberColumn(
-        "11. KM (Extracted/Calc)",
-        format="%.1f km",
-        help="Distance in Kilometers"
-    ),
-    "Rate_per_KM": st.column_config.NumberColumn(
-        "12. Rate / KM",
-        format="₹ %.2f",
-        help="Enter rate (e.g., 11 for Car, 0 for Bus)"
-    ),
-    "Mileage_Total": st.column_config.NumberColumn(
-        "13. Mileage Total",
-        format="₹ %.2f",
-        help="Usually KM * Rate"
-    )
-}
+df = st.session_state['final_tour_diary'].copy()
 
-# Ensure column order matches the request
-display_cols = [
-    "Departure Place", "Departure Date", "Departure Time",
-    "Arrival Place", "Arrival Date", "Arrival Time", "Mode of Travel",
-    "Class_of_Travel", "Ticket_Price_Rate", "Actual_Ticket_Amount",
-    "KM", "Rate_per_KM", "Mileage_Total", 
-    "Purpose"
-]
+# 2. Logic to Merge Extracted Data into Diary
+def smart_prefill(row):
+    # Default Values
+    mode = str(row.get("Mode of Travel", "")).lower()
+    diary_date = str(row.get("Departure Date", ""))
+    
+    # Defaults
+    class_travel = "Other"
+    ticket_price = 0.0
+    km = pd.to_numeric(row.get("KM", 0), errors='coerce')
+    if pd.isna(km): km = 0.0
+    rate_per_km = 0.0
+    
+    # A. Mode Detection
+    if "private" in mode or "car" in mode:
+        class_travel = "Own Car / Pvt"
+        # Often rate is manual for car
+    elif "bus" in mode:
+        class_travel = "Bus / ST"
+    elif "rail" in mode or "train" in mode:
+        class_travel = "Rail"
+    elif "flight" in mode or "air" in mode:
+        class_travel = "Air"
+    
+    # B. INTELLIGENCE MERGE (Check extracted tickets)
+    found_ticket = False
+    if 'extracted_tickets' in st.session_state:
+        for t in st.session_state['extracted_tickets']:
+            # Fuzzy Date Match (Simple string match for now)
+            if t.get('date') in diary_date or diary_date in t.get('date', ''):
+                # If modes loosely match
+                t_mode = t.get('mode', '').lower()
+                if (("bus" in t_mode and "bus" in mode) or 
+                    ("rail" in t_mode and "rail" in mode) or
+                    ("flight" in t_mode and "flight" in mode)):
+                    
+                    ticket_price = float(t.get('amount', 0))
+                    class_travel = t.get('mode', class_travel)
+                    
+                    # If ticket has KM (e.g. Taxi bill), overwrite KM
+                    if t.get('km', 0) > 0:
+                        km = float(t.get('km'))
+                    
+                    found_ticket = True
+                    break
+    
+    # C. Calculation Logic (Standard)
+    actual_total = ticket_price # Assuming 1 ticket per row usually
+    mileage_total = km * rate_per_km
 
-# FILTER: Only show relevant columns
-df_display = df[display_cols]
+    return pd.Series([
+        class_travel,   # Col 8
+        ticket_price,   # Col 9
+        actual_total,   # Col 10
+        km,             # Col 11 (Refilled)
+        rate_per_km,    # Col 12
+        mileage_total   # Col 13
+    ])
 
-edited_df = st.data_editor(
-    df_display,
-    key="ta_editor",
+# 3. Apply Logic (Only if not already edited)
+if 'ta_calculation_df' not in st.session_state:
+    processed_cols = df.apply(smart_prefill, axis=1)
+    processed_cols.columns = [
+        "Class_of_Travel", "Ticket_Price_Rate", "Actual_Ticket_Amount", 
+        "Kilometer", "Rate_per_KM", "Mileage_Total"
+    ]
+    # Update the KM in the diary with the one potentially found in tickets
+    # (Optional: depends if you want strict Diary KM or Ticket KM. Here we prioritize Ticket KM for TA)
+    
+    st.session_state['ta_calculation_df'] = pd.concat([df, processed_cols], axis=1)
+
+# Allow Reset to re-trigger intelligence
+if st.button("🔄 Reload & Merge Extracted Data"):
+    del st.session_state['ta_calculation_df']
+    st.rerun()
+
+current_df = st.session_state['ta_calculation_df']
+
+# 4. The "Old Code" Data Editor
+st.markdown("### 📝 Edit Details (Columns 8-13)")
+st.caption("You can manually change any value extracted by the AI.")
+
+edited_ta = st.data_editor(
+    current_df,
+    key="ta_editor_main",
     use_container_width=True,
-    num_rows="fixed", # Rows controlled by Step 1
-    column_config=column_config,
-    hide_index=True
+    num_rows="dynamic",
+    column_config={
+        # --- FROZEN DIARY COLUMNS (1-7 + 18) ---
+        "Departure Place": st.column_config.TextColumn("1. Departure", disabled=True),
+        "Departure Date": st.column_config.TextColumn("2. Date", disabled=True),
+        "Departure Time": st.column_config.TextColumn("3. Time", disabled=True),
+        "Arrival Place": st.column_config.TextColumn("4. Arrival", disabled=True),
+        "Arrival Date": st.column_config.TextColumn("5. Date", disabled=True),
+        "Arrival Time": st.column_config.TextColumn("6. Time", disabled=True),
+        "Mode of Travel": st.column_config.TextColumn("7. Mode", disabled=True),
+        "Purpose": st.column_config.TextColumn("18. Purpose", disabled=True),
+
+        # --- THE TA CALCULATION COLUMNS (8-13) ---
+        "Class_of_Travel": st.column_config.TextColumn(
+            "8. Class of Travel",
+            help="E.g. Rail 2nd AC, Volvo Bus, Own Car"
+        ),
+        
+        "Ticket_Price_Rate": st.column_config.NumberColumn(
+            "9. Ticket Price/Rate (Rs.)",
+            format="₹ %.2f",
+            help="Extracted from Ticket or Manual Entry"
+        ),
+        
+        "Actual_Ticket_Amount": st.column_config.NumberColumn(
+            "10. Actual Total Amount",
+            format="₹ %.2f",
+            help="Total amount claimed for ticket"
+        ),
+        
+        "Kilometer": st.column_config.NumberColumn(
+            "11. KM",
+            format="%.1f",
+            help="Extracted from Diary or Taxi Bill"
+        ),
+        
+        "Rate_per_KM": st.column_config.NumberColumn(
+            "12. Rate/KM",
+            format="₹ %.2f",
+            help="Manual Rate (e.g., 11 for Car)"
+        ),
+        
+        "Mileage_Total": st.column_config.NumberColumn(
+            "13. Mileage Total",
+            format="₹ %.2f",
+            disabled=True, # Auto-calculated
+            help="KM * Rate"
+        )
+    }
 )
 
-# --- RE-CALCULATE LOGIC (Preserving Manual Edits) ---
-# We write the edits back to the session state
-# If you want 13 to AUTO-CALCULATE based on 11*12, uncomment the next line:
-# edited_df["Mileage_Total"] = edited_df["KM"] * edited_df["Rate_per_KM"]
+# 5. Live Calculation (React to manual edits)
+# Recalculate Mileage Total based on KM * Rate
+edited_ta["Mileage_Total"] = edited_ta["Kilometer"] * edited_ta["Rate_per_KM"]
 
-# Merge back to main state
-st.session_state['ta_calculation_df'].update(edited_df)
+# If Ticket Amount is 0 but Rate is > 0, assume Amount = Rate (Helper logic)
+# (User can still manually override Col 10 if needed, but we default it for convenience)
+edited_ta.loc[(edited_ta["Actual_Ticket_Amount"] == 0) & (edited_ta["Ticket_Price_Rate"] > 0), "Actual_Ticket_Amount"] = edited_ta["Ticket_Price_Rate"]
 
-# --- TOTALS SECTION ---
-st.divider()
-total_ticket = edited_df["Actual_Ticket_Amount"].sum()
-total_mileage = edited_df["Mileage_Total"].sum()
+# Update Session State
+st.session_state['ta_calculation_df'] = edited_ta
+
+# 6. Grand Totals
+total_ticket = edited_ta["Actual_Ticket_Amount"].sum()
+total_mileage = edited_ta["Mileage_Total"].sum()
 grand_total = total_ticket + total_mileage
 
+st.divider()
 c1, c2, c3 = st.columns(3)
-c1.metric("🎫 Ticket Total (Col 10)", f"₹ {total_ticket:,.2f}")
-c2.metric("🚗 Mileage Total (Col 13)", f"₹ {total_mileage:,.2f}")
+c1.metric("🎫 Ticket Total", f"₹ {total_ticket:,.2f}")
+c2.metric("🚗 Mileage Total", f"₹ {total_mileage:,.2f}")
 c3.metric("💰 GRAND TOTAL", f"₹ {grand_total:,.2f}")
