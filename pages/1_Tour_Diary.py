@@ -248,4 +248,5 @@ if st.session_state.get('diary_uploaded') or 'raw_diary_df' in st.session_state:
     if st.button("✅ Confirm & Go to Calc"):
         st.session_state['final_tour_diary'] = edited_df
         # Make sure your next page is named EXACTLY like this:
-        st.switch_page("pages/2_🧮_TA_Calculation.py")
+        st.switch_page("pages/2_TA_Calculation.py")
+
