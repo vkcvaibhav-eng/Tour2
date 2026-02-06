@@ -9,7 +9,7 @@ import json
 
 def call_gemini_extraction(api_key, trip_files, context_prompt):
     """
-    Uses gemini-1.5-flash (or pro) to extract data based on Statutes.
+    Uses gemini-3-flash-preview (or pro) to extract data based on Statutes.
     """
     if not api_key:
         return {"error": "No API Key provided"}
@@ -50,7 +50,7 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
       ]
     }
     """
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash") # changed to stable model name
+    model = genai.GenerativeModel(model_name="gemini-3-flash-preview") # changed to stable model name
     try:
         response = model.generate_content([system_instruction, context_prompt, *gemini_files])
         return response.text
@@ -58,3 +58,4 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
         return {"error": str(e)}
 
 # ... (Keep create_complex_claim_form unchanged for now) ...
+
