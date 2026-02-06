@@ -10,22 +10,34 @@ if 'extracted_data' not in st.session_state:
     st.warning("No data found. Please go to 'Upload & Extract' first.")
     st.stop()
 
-# --- Helper Functions for Data Cleaning ---
+# --- HELPER: Time Parsing & Sorting ---
 def parse_time_safe(t):
-    """Converts various string time formats to datetime.time objects."""
-    if pd.isna(t) or t == "":
+    if pd.isna(t) or t == "" or t is None:
         return None
     try:
-        # Try converting strictly from string
-        return pd.to_datetime(str(t), format='%H:%M').time()
+        if isinstance(t, str):
+            return pd.to_datetime(t, format='%H:%M').time()
+        return t
     except:
         return None
 
-# --- 1. Load & Process Data ---
+def sort_diary(df):
+    """Sorts the diary chronologically by Departure Date and Time."""
+    try:
+        # Create a temp column for sorting that combines Date + Time
+        df['temp_sort'] = df.apply(
+            lambda x: datetime.combine(x['Departure_Date'], x['Departure_Time']) 
+            if pd.notnull(x['Departure_Date']) and pd.notnull(x['Departure_Time']) 
+            else pd.NaT, axis=1
+        )
+        df = df.sort_values(by='temp_sort').drop(columns=['temp_sort'])
+    except Exception as e:
+        pass # If sorting fails (e.g. empty dates), just return as is
+    return df
+
+# --- 1. LOAD DATA ---
 if 'raw_diary_df' not in st.session_state:
     raw_response = st.session_state['extracted_data']
-    
-    # Robust JSON Parsing
     try:
         if isinstance(raw_response, dict):
             data = raw_response
@@ -36,103 +48,137 @@ if 'raw_diary_df' not in st.session_state:
             elif "```" in text_data:
                 text_data = text_data.split("```")[1].split("```")[0]
             data = json.loads(text_data)
-            
         diary_data = data.get("tour_diary", [])
-        
-    except Exception as e:
-        st.error(f"Error reading data: {e}")
-        diary_data = [] # Fallback to empty list so app doesn't crash
+    except:
+        diary_data = []
 
-    # Desired Columns
-    desired_order = [
-        "Departure_Date", "Departure_Time", "Departure_Place",
-        "Arrival_Date", "Arrival_Time", "Arrival_Place",
-        "Mode_of_Travel", "Purpose"
-    ]
+    desired_order = ["Departure_Date", "Departure_Time", "Departure_Place",
+                     "Arrival_Date", "Arrival_Time", "Arrival_Place",
+                     "Mode_of_Travel", "Purpose"]
     
-    # Create DataFrame
     df = pd.DataFrame(diary_data)
-    
-    # Ensure all columns exist
     for col in desired_order:
         if col not in df.columns:
-            df[col] = None  # Use None instead of "" for safety
-            
-    # Reorder
-    df = df[desired_order]
-
-    # --- CRITICAL FIX: Convert Types for Streamlit Editor ---
-    # 1. Convert Dates (Handle DD-MM-YYYY)
+            df[col] = None
+    
+    # Type Conversion
     for col in ["Departure_Date", "Arrival_Date"]:
         df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
-
-    # 2. Convert Times (Handle HH:MM strings)
     for col in ["Departure_Time", "Arrival_Time"]:
         df[col] = df[col].apply(parse_time_safe)
 
-    st.session_state['raw_diary_df'] = df
+    st.session_state['raw_diary_df'] = df[desired_order]
 
-# --- 2. Buttons to Add Rows ---
-col_add, col_stay = st.columns([1, 5])
-with col_add:
-    # "num_rows='dynamic'" inside the editor handles manual adds, 
-    # but sometimes a dedicated button is helpful if the table is empty.
-    if st.button("➕ Add New Row"):
-        new_row = pd.DataFrame([{col: None for col in st.session_state['raw_diary_df'].columns}])
-        st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], new_row], ignore_index=True)
-        st.rerun()
+# Ensure types are correct every reload
+st.session_state['raw_diary_df']["Departure_Date"] = pd.to_datetime(st.session_state['raw_diary_df']["Departure_Date"])
+st.session_state['raw_diary_df']["Arrival_Date"] = pd.to_datetime(st.session_state['raw_diary_df']["Arrival_Date"])
 
-with col_stay:
-    if st.button("🏨 Add 'Stay' Row"):
-        # Adds a row pre-filled with "Stay" in purpose
-        new_row = pd.DataFrame([{
-            "Departure_Date": None, "Departure_Time": None, "Departure_Place": "Hotel/Guest House",
-            "Arrival_Date": None, "Arrival_Time": None, "Arrival_Place": "Same",
-            "Mode_of_Travel": "Bus", "Purpose": "Stay"
-        }])
-        st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], new_row], ignore_index=True)
-        st.rerun()
 
-# --- 3. The Editable Table ---
-st.info("Step 1: Verify the schedule below. Use the **+** icon at the bottom of the table to add more rows.")
+# ==========================================
+# SECTION: EASY ADD ENTRY (Tabs)
+# ==========================================
+st.markdown("### ➕ Add Details Easily")
+tab_travel, tab_stay = st.tabs(["🚌 Add Journey (Travel)", "🏨 Add Stay (Halt)"])
 
-try:
-    edited_diary = st.data_editor(
-        st.session_state['raw_diary_df'],
-        num_rows="dynamic",  # Allows manual adding/deleting rows
-        use_container_width=True,
-        key="diary_editor",
-        column_config={
-            "Departure_Date": st.column_config.DateColumn("Departure Date", format="DD-MM-YYYY"),
-            "Departure_Time": st.column_config.TimeColumn("Departure Time", format="HH:mm"),
-            "Departure_Place": st.column_config.TextColumn("Departure Place"),
-            
-            "Arrival_Date": st.column_config.DateColumn("Arrival Date", format="DD-MM-YYYY"),
-            "Arrival_Time": st.column_config.TimeColumn("Arrival Time", format="HH:mm"),
-            "Arrival_Place": st.column_config.TextColumn("Arrival Place"),
-            
-            "Mode_of_Travel": st.column_config.SelectboxColumn(
-                "Mode of Travel", 
-                options=["Rail", "Bus", "Govt Vehicle", "Private Car", "Air", "Taxi"],
-                required=False
-            ),
-            "Purpose": st.column_config.TextColumn("Purpose")
-        }
-    )
-    
-    # Sync edits back to session state immediately
-    st.session_state['raw_diary_df'] = edited_diary
+# --- TAB 1: ADD TRAVEL ---
+with tab_travel:
+    with st.form("add_travel_form", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns(4)
+        dep_date = c1.date_input("Departure Date")
+        dep_time = c2.time_input("Departure Time", value=None)
+        dep_place = c3.text_input("Departure Place")
+        mode = c4.selectbox("Mode", ["Bus", "Rail", "Auto Rickshaw", "Taxi", "Govt Vehicle", "Private Car", "Air"])
+        
+        c5, c6, c7, c8 = st.columns(4)
+        arr_date = c5.date_input("Arrival Date")
+        arr_time = c6.time_input("Arrival Time", value=None)
+        arr_place = c7.text_input("Arrival Place")
+        purpose = c8.text_input("Purpose", value="Official Work")
 
-except Exception as e:
-    st.error(f"Data Error: {e}")
-    st.write("Raw data for debugging:", st.session_state['raw_diary_df'])
+        if st.form_submit_button("Add Journey"):
+            new_row = {
+                "Departure_Date": pd.to_datetime(dep_date),
+                "Departure_Time": dep_time,
+                "Departure_Place": dep_place,
+                "Arrival_Date": pd.to_datetime(arr_date),
+                "Arrival_Time": arr_time,
+                "Arrival_Place": arr_place,
+                "Mode_of_Travel": mode,
+                "Purpose": purpose
+            }
+            # Add, Sort, Update
+            st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], pd.DataFrame([new_row])], ignore_index=True)
+            st.session_state['raw_diary_df'] = sort_diary(st.session_state['raw_diary_df'])
+            st.success("Journey Added & Sorted!")
+            st.rerun()
+
+# --- TAB 2: ADD STAY ---
+with tab_stay:
+    st.caption("Use this to record a night halt or stay at a hotel.")
+    with st.form("add_stay_form", clear_on_submit=True):
+        s1, s2, s3 = st.columns(3)
+        stay_place = s1.text_input("Place of Stay (e.g. Hotel X)")
+        stay_date_in = s2.date_input("Check-in / Start Date")
+        stay_time_in = s3.time_input("Check-in Time", value=time(20, 0)) # Default 8 PM
+        
+        s4, s5, s6 = st.columns(3)
+        stay_remark = s4.text_input("Remark", value="Night Halt")
+        stay_date_out = s5.date_input("Check-out / End Date")
+        stay_time_out = s6.time_input("Check-out Time", value=time(8, 0)) # Default 8 AM
+
+        if st.form_submit_button("Add Stay Record"):
+            new_row = {
+                "Departure_Date": pd.to_datetime(stay_date_in),
+                "Departure_Time": stay_time_in,
+                "Departure_Place": stay_place,
+                "Arrival_Date": pd.to_datetime(stay_date_out),
+                "Arrival_Time": stay_time_out,
+                "Arrival_Place": stay_place, # Stay is same place
+                "Mode_of_Travel": "None",
+                "Purpose": stay_remark
+            }
+            st.session_state['raw_diary_df'] = pd.concat([st.session_state['raw_diary_df'], pd.DataFrame([new_row])], ignore_index=True)
+            st.session_state['raw_diary_df'] = sort_diary(st.session_state['raw_diary_df'])
+            st.success("Stay Added & Sorted!")
+            st.rerun()
 
 st.markdown("---")
 
-# --- 4. Save & Proceed ---
+# ==========================================
+# SECTION: VIEW & EDIT TABLE
+# ==========================================
+st.info("👇 **Review Your Schedule** (Rows are automatically sorted by Date/Time)")
+
+edited_diary = st.data_editor(
+    st.session_state['raw_diary_df'],
+    num_rows="dynamic",
+    use_container_width=True,
+    key="diary_editor",
+    column_config={
+        "Departure_Date": st.column_config.DateColumn("Dep Date", format="DD-MM-YYYY"),
+        "Departure_Time": st.column_config.TimeColumn("Dep Time", format="HH:mm"),
+        "Departure_Place": st.column_config.TextColumn("Dep Place"),
+        
+        "Arrival_Date": st.column_config.DateColumn("Arr Date", format="DD-MM-YYYY"),
+        "Arrival_Time": st.column_config.TimeColumn("Arr Time", format="HH:mm"),
+        "Arrival_Place": st.column_config.TextColumn("Arr Place"),
+        
+        "Mode_of_Travel": st.column_config.SelectboxColumn(
+            "Mode", 
+            options=["Bus", "Rail", "Auto Rickshaw", "Taxi", "Govt Vehicle", "Private Car", "Air", "None"],
+            required=True
+        ),
+        "Purpose": st.column_config.TextColumn("Purpose")
+    }
+)
+
+# Sync edits
+st.session_state['raw_diary_df'] = edited_diary
+
+st.markdown("---")
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.caption("Review the dates and places above. Once correct, proceed to calculate money.")
+    st.caption("Once the list above is correct, proceed to calculation.")
 with col2:
     if st.button("✅ Confirm & Go to Calc"):
         st.session_state['final_tour_diary'] = edited_diary
