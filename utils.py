@@ -5,7 +5,21 @@ import pandas as pd
 import google.generativeai as genai
 import json
 
-# ... (Keep existing RULES_DIR and save_permanent_rule functions unchanged) ...
+# Directory for permanent rules
+RULES_DIR = "rules_storage"
+if not os.path.exists(RULES_DIR):
+    os.makedirs(RULES_DIR)
+
+def save_permanent_rule(uploaded_file):
+    if uploaded_file is not None:
+        file_path = os.path.join(RULES_DIR, uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        return file_path
+    return None
+
+def list_saved_rules():
+    return [os.path.basename(x) for x in glob.glob(os.path.join(RULES_DIR, "*.pdf"))]
 
 def call_gemini_extraction(api_key, trip_files, context_prompt):
     """
@@ -58,4 +72,5 @@ def call_gemini_extraction(api_key, trip_files, context_prompt):
         return {"error": str(e)}
 
 # ... (Keep create_complex_claim_form unchanged for now) ...
+
 
