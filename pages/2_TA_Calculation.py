@@ -61,26 +61,13 @@ def extract_data_from_documents(uploaded_files):
         try:
             image_data = file.getvalue()
             image_parts = [{"mime_type": file.type, "data": image_data}]
-            
-            # IMPROVED PROMPT: Asks specifically for amount and standard date format
-            prompt = """
-            Analyze this Travel Ticket/Bill. 
-            Extract the 'Total Amount' and 'Date of Journey'.
-            Return ONLY a JSON list: [{"date": "DD-MM-YYYY", "amount": 1500.00}]
-            If date is not found, leave it empty. Ensure amount is a number (float).
-            """
-            
-            model = genai.GenerativeModel('gemini-3-flash-preview')
+            prompt = "Analyze this Travel Ticket. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([prompt, image_parts[0]])
             text = response.text.strip()
-            
-            # Clean up JSON formatting (remove markdown backticks if present)
             if "```json" in text: text = text.split("```json")[1].split("```")[0]
-            elif "```" in text: text = text.split("```")[1].split("```")[0]
-            
             data = json.loads(text)
             results.extend(data if isinstance(data, list) else [data])
-            
         except Exception as e:
             st.warning(f"Error reading {file.name}: {e}")
         progress_bar.progress((i + 1) / len(uploaded_files))
@@ -91,7 +78,8 @@ def validate_against_rules(table_df, salary_file, rules_file):
     model = genai.GenerativeModel('gemini-3-flash-preview')
     table_json = table_df.to_json(orient="records")
     
-    # --- FIX: Prepare files correctly ---
+    # --- FIX STARTS HERE ---
+    # Convert Streamlit UploadedFile objects into the format Gemini expects (blob + mime_type)
     salary_part = {
         "mime_type": salary_file.type,
         "data": salary_file.getvalue()
@@ -101,10 +89,11 @@ def validate_against_rules(table_df, salary_file, rules_file):
         "mime_type": rules_file.type,
         "data": rules_file.getvalue()
     }
-    # ------------------------------------
+    # --- FIX ENDS HERE ---
 
     prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
     
+    # Pass the processed 'parts' instead of the raw files
     response = model.generate_content([prompt, salary_part, rules_part])
     return response.text
 
@@ -122,63 +111,34 @@ ticket_files = st.file_uploader("Upload Tickets/Bills (PDF/Images)", accept_mult
 
 if ticket_files and st.button("🤖 Extract & Merge Ticket Data"):
     with st.spinner("Gemini is reading tickets..."):
-        # 1. Run extraction
         st.session_state['extracted_tickets'] = extract_data_from_documents(ticket_files)
-        
-        # 2. Force table regeneration
-        # We delete the old dataframe so the app is forced to rebuild it using the new prices
-        if 'ta_rearranged_df' in st.session_state:
-            del st.session_state['ta_rearranged_df']
-            
-        st.success("Tickets extracted! Reloading table with new prices...")
-        
-        # 3. Reload the page automatically
+        if 'ta_rearranged_df' in st.session_state: del st.session_state['ta_rearranged_df']
+        st.success("Tickets extracted! Merging into table...")
         st.rerun()
 
 st.divider()
 
 # Logic to generate table from diary
-# Logic to generate table from diary (Updated for better matching)
 def smart_calculation_logic(row):
     mode = str(row.get("Mode_of_Travel", "")).lower()
-    diary_date = str(row.get("Departure_Date", "")).strip() # Clean whitespace
-    
-    # 1. Get KM
+    diary_date = str(row.get("Departure_Date", ""))
     km = pd.to_numeric(row.get("KM", 0), errors='coerce')
     if pd.isna(km) or km == 0:
         km = try_get_km_from_raw(diary_date, row.get("Departure_Place", ""))
-        
-    # 2. Get Ticket Price (The Fix)
     ticket_rate = 0.0
+    travel_class = "2nd AC" if "rail" in mode else "Economy" if "flight" in mode else "Express"
     if 'extracted_tickets' in st.session_state:
         for t in st.session_state['extracted_tickets']:
-            # Try to match the ticket date with the diary date
-            ticket_date = str(t.get('date', '')).strip()
-            ticket_amt = float(t.get('amount', 0))
-            
-            # Simple fuzzy match check
-            if (diary_date and ticket_date) and (diary_date in ticket_date or ticket_date in diary_date):
-                ticket_rate = ticket_amt
+            if str(t.get('date')) in diary_date or diary_date in str(t.get('date')):
+                ticket_rate = float(t.get('amount', 0))
                 break
-                
-    travel_class = "2nd AC" if "rail" in mode else "Economy" if "flight" in mode else "Express"
     rate_per_km = 15.0 if ("auto" in mode or "rickshaw" in mode) else 0.0
-    
-    return pd.Series([
-        row.get("Departure_Place"), 
-        row.get("Departure_Date"), 
-        row.get("Departure_Time"), 
-        row.get("Arrival_Place"), 
-        row.get("Arrival_Date"), 
-        row.get("Arrival_Time"), 
-        row.get("Mode_of_Travel"), 
-        travel_class, 
-        ticket_rate,  # Col 9 (Price)
-        ticket_rate,  # Col 10 (Total)
-        km, 
-        rate_per_km, 
-        0.0
-    ])
+    return pd.Series([row.get("Departure_Place"), row.get("Departure_Date"), row.get("Departure_Time"), row.get("Arrival_Place"), row.get("Arrival_Date"), row.get("Arrival_Time"), row.get("Mode_of_Travel"), travel_class, ticket_rate, ticket_rate, km, rate_per_km, 0.0])
+
+if 'ta_rearranged_df' not in st.session_state:
+    ta_df = st.session_state['final_tour_diary'].apply(smart_calculation_logic, axis=1)
+    ta_df.columns = ALL_COLS
+    st.session_state['ta_rearranged_df'] = ta_df
 
 # # ==========================================
 # 🆕 CORRECTED SECTION: MANUAL PRICE/KM UPDATE
@@ -262,8 +222,6 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
-
-
 
 
 
