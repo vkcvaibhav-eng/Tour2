@@ -120,7 +120,7 @@ def calculate_intelligent_da(df, da_rate):
 def extract_salary_info(salary_file, rules_file):
     """Uses Gemini to identify Pay Level and applicable DA Rate."""
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         prompt = """
         Analyze these University documents:
         1. From the Salary Slip: Extract the current Pay Level/Grade.
