@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 import google.generativeai as genai
 import json
-import io
-from PIL import Image
-from datetime import datetime
 
 # ==========================================
 # ⚙️ CONFIGURATION & SETUP
 # ==========================================
-st.set_page_config(layout="wide", page_title="Step 2: TA Calculation & AI Validation")
+st.set_page_config(layout="wide", page_title="University TA/DA Calculation System")
+st.title("📅 Step 3: Statutory DA Calculation (Statute S.119)")
 
 api_key = st.session_state.get('gemini_api_key')
 if not api_key:
@@ -17,212 +16,185 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- EXACT COLUMN NAME DEFINITIONS ---
-COL1 = "1. Departure Place"
-COL2 = "2. Departure Date"
-COL3 = "3. Departure Time"
-COL4 = "4. Arrival Place"
-COL5 = "5. Arrival Date"
-COL6 = "6. Arrival Time"
-COL7 = "7. Mode"
-COL8 = "8. Class"
-COL9 = "9. Ticket Price/Rate (Rs.)"
-COL10 = "10. Actual Total Amount of Ticket (Rs.)"
-COL11 = "11. KM"
-COL12 = "12. Rate (Rs.) (Auto/Taxi/Pvt)"
-COL13 = "13. Total (Rs.)"
-
-ALL_COLS = [COL1, COL2, COL3, COL4, COL5, COL6, COL7, COL8, COL9, COL10, COL11, COL12, COL13]
-
-# ==========================================
-# 🧠 HELPERS
-# ==========================================
-def try_get_km_from_raw(dep_date, dep_place):
-    raw_data = st.session_state.get('extracted_data', {})
-    if isinstance(raw_data, str):
-        try:
-            if "```json" in raw_data:
-                raw_data = json.loads(raw_data.split("```json")[1].split("```")[0])
-            elif "```" in raw_data:
-                raw_data = json.loads(raw_data.split("```")[1].split("```")[0])
-        except: return 0.0
-    if isinstance(raw_data, list):
-        for entry in raw_data:
-            if str(entry.get('Departure Date')) == str(dep_date) and entry.get('Departure Place') == dep_place:
-                return float(entry.get('KM', 0))
-    return 0.0
-
-def extract_data_from_documents(uploaded_files):
-    if not uploaded_files: return []
-    results = []
-    progress_bar = st.progress(0)
-    for i, file in enumerate(uploaded_files):
-        try:
-            image_data = file.getvalue()
-            image_parts = [{"mime_type": file.type, "data": image_data}]
-            prompt = "Analyze this Travel Ticket. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
-            model = genai.GenerativeModel('gemini-3-flash-preview')
-            response = model.generate_content([prompt, image_parts[0]])
-            text = response.text.strip()
-            if "```json" in text: text = text.split("```json")[1].split("```")[0]
-            data = json.loads(text)
-            results.extend(data if isinstance(data, list) else [data])
-        except Exception as e:
-            st.warning(f"Error reading {file.name}: {e}")
-        progress_bar.progress((i + 1) / len(uploaded_files))
-    progress_bar.empty()
-    return results
-
-def validate_against_rules(table_df, salary_file, rules_file):
-    model = genai.GenerativeModel('gemini-3-flash-preview')
-    table_json = table_df.to_json(orient="records")
-    
-    # --- FIX STARTS HERE ---
-    # Convert Streamlit UploadedFile objects into the format Gemini expects (blob + mime_type)
-    salary_part = {
-        "mime_type": salary_file.type,
-        "data": salary_file.getvalue()
-    }
-    
-    rules_part = {
-        "mime_type": rules_file.type,
-        "data": rules_file.getvalue()
-    }
-    # --- FIX ENDS HERE ---
-
-    prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
-    
-    # Pass the processed 'parts' instead of the raw files
-    response = model.generate_content([prompt, salary_part, rules_part])
-    return response.text
-
-# ==========================================
-# 📥 SECTION 1: UPLOAD & SMART TABLE
-# ==========================================
-st.title("🧮 Step 2: TA Calculation (Rearranged 1-13)")
-
-if 'final_tour_diary' not in st.session_state:
-    st.error("⚠️ Please complete Step 1 (Tour Diary) first.")
+# --- DATA IMPORT FROM STEP 2 ---
+if 'ta_rearranged_df' not in st.session_state:
+    st.warning("⚠️ No TA data found from Step 2. Please complete TA Calculation first.")
     st.stop()
 
-st.subheader("1. Smart Extract from Tickets")
-ticket_files = st.file_uploader("Upload Tickets/Bills (PDF/Images)", accept_multiple_files=True, key="tick_up")
+# Master Column Structure
+COL_NAMES = [
+    "1. Departure Place", "2. Departure Date", "3. Departure Time",
+    "4. Arrival Place", "5. Arrival Date", "6. Arrival Time",
+    "7. Mode", "8. Class", "9. Ticket Price/Rate (Rs.)",
+    "10. Actual Total Amount of Ticket (Rs.)", "11. KM", "12. Rate (Rs.)",
+    "13. Total (Rs.)", 
+    "14. Days of daily allowance receivable (Hrs)", 
+    "15. Daily allowance rate (Rs.)", 
+    "16. Amount of Allowance (Rs.)", 
+    "17. Total amount receivable (10+13+16) (Rs.)",
+    "18. Purpose of Journey"
+]
 
-if ticket_files and st.button("🤖 Extract & Merge Ticket Data"):
-    with st.spinner("Gemini is reading tickets..."):
-        st.session_state['extracted_tickets'] = extract_data_from_documents(ticket_files)
-        if 'ta_rearranged_df' in st.session_state: del st.session_state['ta_rearranged_df']
-        st.success("Tickets extracted! Merging into table...")
-        st.rerun()
-
-st.divider()
-
-# Logic to generate table from diary
-def smart_calculation_logic(row):
-    mode = str(row.get("Mode_of_Travel", "")).lower()
-    diary_date = str(row.get("Departure_Date", ""))
-    km = pd.to_numeric(row.get("KM", 0), errors='coerce')
-    if pd.isna(km) or km == 0:
-        km = try_get_km_from_raw(diary_date, row.get("Departure_Place", ""))
-    ticket_rate = 0.0
-    travel_class = "2nd AC" if "rail" in mode else "Economy" if "flight" in mode else "Express"
-    if 'extracted_tickets' in st.session_state:
-        for t in st.session_state['extracted_tickets']:
-            if str(t.get('date')) in diary_date or diary_date in str(t.get('date')):
-                ticket_rate = float(t.get('amount', 0))
-                break
-    rate_per_km = 15.0 if ("auto" in mode or "rickshaw" in mode) else 0.0
-    return pd.Series([row.get("Departure_Place"), row.get("Departure_Date"), row.get("Departure_Time"), row.get("Arrival_Place"), row.get("Arrival_Date"), row.get("Arrival_Time"), row.get("Mode_of_Travel"), travel_class, ticket_rate, ticket_rate, km, rate_per_km, 0.0])
-
-if 'ta_rearranged_df' not in st.session_state:
-    ta_df = st.session_state['final_tour_diary'].apply(smart_calculation_logic, axis=1)
-    ta_df.columns = ALL_COLS
-    st.session_state['ta_rearranged_df'] = ta_df
-
-# # ==========================================
-# 🆕 CORRECTED SECTION: MANUAL PRICE/KM UPDATE
 # ==========================================
-st.subheader("2. Manual Update (If AI Missed Price)")
-with st.expander("Click here to manually set Price or KM for a specific journey"):
-    # Create a unique list of journeys (Date + From -> To) to prevent selecting wrong row
-    journey_options = st.session_state['ta_rearranged_df'].apply(
-        lambda x: f"{x[COL2]} | {x[COL1]} to {x[COL4]}", axis=1
-    ).tolist()
-    
-    col_sel, col_val, col_km = st.columns([2, 1, 1])
-    
-    selected_label = col_sel.selectbox("Select Specific Journey to Update", journey_options)
-    new_price = col_val.number_input("Enter Manual Price (Col 9)", min_value=0.0, step=10.0, key="man_pr")
-    new_km = col_km.number_input("Enter Manual KM (Col 11)", min_value=0.0, step=1.0, key="man_km")
-    
-    if st.button("✅ Apply Manual Update to Table"):
-        # Find the exact index based on the label we created
-        idx = journey_options.index(selected_label)
-        
-        # Update the values in the session state dataframe
-        if new_price > 0:
-            st.session_state['ta_rearranged_df'].at[idx, COL9] = new_price
-            # Also update the calculated column 10 immediately
-            st.session_state['ta_rearranged_df'].at[idx, COL10] = new_price
+# 🛠️ SECTION I: CALCULATE DA (Rate & Time)
+# ==========================================
+st.header("Section I: DA Rate Determination & Calculation")
+st.info("Upload your Salary Slip and Rules. The AI will determine your Rate, and the system will calculate DA days based on Statute S.119.")
+
+col1, col2 = st.columns(2)
+with col1:
+    salary_slip = st.file_uploader("Upload Salary Slip", type=['pdf', 'png', 'jpg'], key="da_sal")
+with col2:
+    rules_doc = st.file_uploader("Upload Statute S.119 Rules", type=['pdf'], key="da_rules")
+
+if salary_slip and rules_doc:
+    if st.button("🚀 Calculate Daily Allowance"):
+        with st.spinner("Determining Pay Level and Calculating Admissible Days..."):
             
-        if new_km > 0:
-            st.session_state['ta_rearranged_df'].at[idx, COL11] = new_km
+            # 1. GET DA RATE VIA AI (From Documents)
+            salary_blob = {"mime_type": salary_slip.type, "data": salary_slip.getvalue()}
+            rules_blob = {"mime_type": rules_doc.type, "data": rules_doc.getvalue()}
             
-        st.success(f"Updated journey: {selected_label}")
-        st.rerun()
+            rate_prompt = """
+            Review the Salary Slip to find the 'Pay Level'. 
+            Review the Statute S.119 Rules to find the 'Daily Allowance Rate' for that level.
+            Check for any reductions (Circuit House, etc.).
+            Return ONLY a JSON object: {"da_rate": 000}
+            """
+            
+            try:
+                response = model.generate_content([rate_prompt, salary_blob, rules_blob])
+                # Clean and parse JSON
+                clean_text = response.text.replace('```json', '').replace('```', '').strip()
+                da_rate = json.loads(clean_text).get('da_rate', 0)
+            except:
+                st.error("Could not automatically determine rate. Defaulting to 0.")
+                da_rate = 0
+
+            # 2. PERFORM STATUTORY CALCULATION (Python Logic)
+            base_df = st.session_state['ta_rearranged_df'].copy()
+            
+            # Ensure columns exist before processing
+            for col in ["14. Days of daily allowance receivable (Hrs)", "15. Daily allowance rate (Rs.)", "16. Amount of Allowance (Rs.)"]:
+                if col not in base_df.columns:
+                    base_df[col] = ""
+
+            # Function: S.119 6/12/24 Hour Rule
+            def calculate_da_statute_s119(start_dt, end_dt):
+                duration = end_dt - start_dt
+                total_hrs = duration.total_seconds() / 3600
+                
+                # Rule: No DA for < 6 hours
+                if total_hrs < 6:
+                    return 0.0, total_hrs
+                
+                # Rule: Full blocks of 24 hours
+                full_days = int(total_hrs // 24)
+                remainder = total_hrs % 24
+                
+                # Rule: Regulate the remaining period
+                extra_day = 0.0
+                if 6 <= remainder < 12:
+                    extra_day = 0.5  # Half DA
+                elif remainder >= 12:
+                    extra_day = 1.0  # Full DA
+                
+                return (full_days + extra_day), total_hrs
+
+            # Apply calculation row-by-row
+            for idx, row in base_df.iterrows():
+                try:
+                    # Parse Dates
+                    d_date = pd.to_datetime(row["2. Departure Date"], dayfirst=True).date()
+                    d_time = pd.to_datetime(row["3. Departure Time"]).time()
+                    a_date = pd.to_datetime(row["5. Arrival Date"], dayfirst=True).date()
+                    a_time = pd.to_datetime(row["6. Arrival Time"]).time()
+                    
+                    dep_dt = datetime.combine(d_date, d_time)
+                    arr_dt = datetime.combine(a_date, a_time)
+                    
+                    # Calculate
+                    da_days, hrs = calculate_da_statute_s119(dep_dt, arr_dt)
+                    
+                    # Fill Dataframe
+                    base_df.at[idx, "14. Days of daily allowance receivable (Hrs)"] = f"{da_days} ({round(hrs, 1)} hrs)"
+                    base_df.at[idx, "15. Daily allowance rate (Rs.)"] = da_rate
+                    base_df.at[idx, "16. Amount of Allowance (Rs.)"] = da_days * da_rate
+                    
+                except Exception as e:
+                    # Handle empty rows or parsing errors gracefully
+                    continue
+
+            # 3. DISPLAY TABLE EXACTLY LIKE THE IMAGE
+            st.success(f"Calculation Complete. Applicable Rate: ₹{da_rate}")
+            st.subheader("Date-wise DA Breakdown")
+            
+            # Create a specific view matching the image columns
+            # Using .get to avoid KeyErrors if columns are missing for some reason, though they are initialized above
+            da_display_df = base_df[[
+                "2. Departure Date", 
+                "14. Days of daily allowance receivable (Hrs)", 
+                "15. Daily allowance rate (Rs.)", 
+                "16. Amount of Allowance (Rs.)"
+            ]].copy()
+            
+            # Rename columns to match the image exactly
+            da_display_df.columns = [
+                "Date", 
+                "Days of daily allowance receivable", 
+                "Daily allowance rate (Rs.)", 
+                "Amount of Allowance (Rs.)"
+            ]
+            
+            # Use st.table for the exact look requested
+            st.table(da_display_df)
+            
+            # Save to session for Section II
+            st.session_state['processed_da_df'] = base_df
 
 # ==========================================
-# 🧮 SECTION 3: REVIEW & EDIT TABLE
-# ==========================================
-st.subheader("3. Review & Edit TA Table")
-
-df_to_edit = st.session_state['ta_rearranged_df'].copy()
-df_to_edit[COL10] = pd.to_numeric(df_to_edit[COL9], errors='coerce').fillna(0)
-df_to_edit[COL13] = df_to_edit[COL10] + (pd.to_numeric(df_to_edit[COL11], errors='coerce').fillna(0) * pd.to_numeric(df_to_edit[COL12], errors='coerce').fillna(0))
-
-edited_ta = st.data_editor(
-    df_to_edit,
-    use_container_width=True,
-    num_rows="dynamic",
-    key="ta_editor_main",
-    column_config={
-        COL8: st.column_config.SelectboxColumn(COL8, options=["1st AC", "2nd AC", "3rd AC", "CC", "Sleeper", "Business Class", "Economic Class", "Express", "Super Express"]),
-        COL10: st.column_config.NumberColumn(COL10, format="₹ %.2f", disabled=True),
-        COL13: st.column_config.NumberColumn(COL13, format="₹ %.2f", disabled=True)
-    }
-)
-
-# SYNC & RECALCULATE
-if COL9 in edited_ta.columns:
-    edited_ta[COL10] = pd.to_numeric(edited_ta[COL9], errors='coerce').fillna(0)
-    edited_ta[COL13] = edited_ta[COL10] + (pd.to_numeric(edited_ta[COL11], errors='coerce').fillna(0) * pd.to_numeric(edited_ta[COL12], errors='coerce').fillna(0))
-    st.session_state['ta_rearranged_df'] = edited_ta
-
-# ==========================================
-# 📑 SECTION 4: AI RULE VALIDATION
+# 📄 SECTION II: MASTER TABLE & EXPORT
 # ==========================================
 st.divider()
-st.subheader("4. AI Policy Validation (Rules & Salary Slip)")
-col_a, col_b = st.columns(2)
-with col_a: sal_up = st.file_uploader("Upload Salary Slip", type=['pdf','png','jpg'], key="salary_val")
-with col_b: rules_up = st.file_uploader("Upload TA Rules", type=['pdf','txt'], key="rules_val")
+st.header("Section II: Final University TA/DA Master Table")
 
-if st.button("⚖️ Run AI Audit"):
-    if not sal_up or not rules_up:
-        st.error("Please upload both documents for validation.")
-    else:
-        with st.spinner("Validating..."):
-            report = validate_against_rules(edited_ta, sal_up, rules_up)
-            if "VALIDATED" in report.upper():
-                st.success(report); st.session_state['audit_passed'] = True
-            else:
-                st.error("Policy Disparity Detected:"); st.info(report); st.session_state['audit_passed'] = False
+if 'processed_da_df' in st.session_state:
+    master_df = st.session_state['processed_da_df'].copy()
+    
+    # Calculate Column 17: Sum (Col 10 + Col 13 + Col 16)
+    for idx, row in master_df.iterrows():
+        try:
+            c10 = float(pd.to_numeric(row.get("10. Actual Total Amount of Ticket (Rs.)", 0), errors='coerce') or 0)
+            c13 = float(pd.to_numeric(row.get("13. Total (Rs.)", 0), errors='coerce') or 0)
+            c16 = float(pd.to_numeric(row.get("16. Amount of Allowance (Rs.)", 0), errors='coerce') or 0)
+            
+            master_df.at[idx, "17. Total amount receivable (10+13+16) (Rs.)"] = c10 + c13 + c16
+        except:
+            master_df.at[idx, "17. Total amount receivable (10+13+16) (Rs.)"] = 0
 
-if st.session_state.get('audit_passed'):
-    if st.button("Proceed to DA Calculation ➡️"):
-        st.switch_page("pages/3_DA_Calculation.py")
+    # Ensure Column 18 exists
+    if "18. Purpose of Journey" not in master_df.columns:
+        master_df["18. Purpose of Journey"] = ""
 
+    # Display Editable Master Table
+    st.write("Review the complete table below (Columns 1–18):")
+    final_table = st.data_editor(
+        master_df[COL_NAMES], 
+        use_container_width=True, 
+        height=500,
+        num_rows="dynamic"
+    )
 
-
-
+    # PAGE 5 EXPORT
+    st.subheader("📤 Export Data (Page 5)")
+    csv = final_table.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Final TA/DA Statement (CSV)",
+        data=csv,
+        file_name="University_TADA_Final_Page5.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("Please perform the calculation in Section I first.")
