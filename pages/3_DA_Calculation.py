@@ -17,7 +17,7 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-3-flash-preview')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- DATA IMPORT FROM STEP 2 ---
 if 'ta_rearranged_df' not in st.session_state:
@@ -119,6 +119,21 @@ if salary_slip and rules_doc:
                     continue
 
             st.success(f"DA Calculation Complete for {audit_result['pay_level']} at ₹{da_rate}/day.")
+            
+            # --- NEW TABLE ADDED HERE ---
+            st.subheader("Date-wise DA Breakdown")
+            # Creating the specific table view for Columns 14, 15, and 16
+            da_view_df = base_df[[
+                "2. Departure Date", 
+                "14. Days of daily allowance receivable (Hrs)", 
+                "15. Daily allowance rate (Rs.)", 
+                "16. Amount of Allowance (Rs.)"
+            ]].copy()
+            
+            # Displaying the Date-wise table
+            st.table(da_view_df)
+            # ---------------------------
+
             st.session_state['processed_da_df'] = base_df
 
 # ==========================================
