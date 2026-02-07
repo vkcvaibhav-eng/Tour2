@@ -77,8 +77,24 @@ def extract_data_from_documents(uploaded_files):
 def validate_against_rules(table_df, salary_file, rules_file):
     model = genai.GenerativeModel('gemini-1.5-flash')
     table_json = table_df.to_json(orient="records")
+    
+    # --- FIX STARTS HERE ---
+    # Convert Streamlit UploadedFile objects into the format Gemini expects (blob + mime_type)
+    salary_part = {
+        "mime_type": salary_file.type,
+        "data": salary_file.getvalue()
+    }
+    
+    rules_part = {
+        "mime_type": rules_file.type,
+        "data": rules_file.getvalue()
+    }
+    # --- FIX ENDS HERE ---
+
     prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
-    response = model.generate_content([prompt, salary_file, rules_file])
+    
+    # Pass the processed 'parts' instead of the raw files
+    response = model.generate_content([prompt, salary_part, rules_part])
     return response.text
 
 # ==========================================
@@ -206,4 +222,5 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
 
