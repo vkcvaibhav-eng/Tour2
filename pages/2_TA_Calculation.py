@@ -75,7 +75,7 @@ def extract_data_from_documents(uploaded_files):
     return results
 
 def validate_against_rules(table_df, salary_file, rules_file):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     table_json = table_df.to_json(orient="records")
     
     # --- FIX STARTS HERE ---
@@ -222,5 +222,6 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
 
 
