@@ -16,7 +16,7 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-3-flash-preview')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- DATA IMPORT FROM STEP 2 ---
 if 'ta_rearranged_df' not in st.session_state:
@@ -76,10 +76,11 @@ if salary_slip and rules_doc:
             # 2. PERFORM STATUTORY CALCULATION (Python Logic)
             base_df = st.session_state['ta_rearranged_df'].copy()
             
-            # Ensure columns exist before processing
-            for col in ["14. Days of daily allowance receivable (Hrs)", "15. Daily allowance rate (Rs.)", "16. Amount of Allowance (Rs.)"]:
+            # CRITICAL FIX: Ensure all required columns exist in base_df before processing
+            # This prevents the KeyError when creating the da_display_df later
+            for col in COL_NAMES:
                 if col not in base_df.columns:
-                    base_df[col] = ""
+                    base_df[col] = "" # Initialize missing columns
 
             # Function: S.119 6/12/24 Hour Rule
             def calculate_da_statute_s119(start_dt, end_dt):
@@ -132,7 +133,7 @@ if salary_slip and rules_doc:
             st.subheader("Date-wise DA Breakdown")
             
             # Create a specific view matching the image columns
-            # Using .get to avoid KeyErrors if columns are missing for some reason, though they are initialized above
+            # Now safe because we initialized columns above
             da_display_df = base_df[[
                 "2. Departure Date", 
                 "14. Days of daily allowance receivable (Hrs)", 
@@ -198,4 +199,3 @@ if 'processed_da_df' in st.session_state:
     )
 else:
     st.info("Please perform the calculation in Section I first.")
-
