@@ -17,7 +17,7 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-pro')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 # Ensure TA data exists from previous steps
 if 'ta_rearranged_df' not in st.session_state:
