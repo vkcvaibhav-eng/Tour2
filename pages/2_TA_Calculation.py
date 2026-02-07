@@ -62,7 +62,7 @@ def extract_data_from_documents(uploaded_files):
             image_data = file.getvalue()
             image_parts = [{"mime_type": file.type, "data": image_data}]
             prompt = "Analyze this Travel Ticket. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3-flash-preview')
             response = model.generate_content([prompt, image_parts[0]])
             text = response.text.strip()
             if "```json" in text: text = text.split("```json")[1].split("```")[0]
@@ -222,6 +222,7 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
 
 
 
