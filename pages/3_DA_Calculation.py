@@ -16,7 +16,7 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-3-flash-preview')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- DATA IMPORT FROM STEP 2 ---
 if 'ta_rearranged_df' not in st.session_state:
@@ -122,19 +122,28 @@ if salary_slip and rules_doc:
                     # Handle empty rows or parsing errors gracefully
                     continue
 
-            # 3. DISPLAY DATE-WISE CALCULATION TABLE (Section I Output)
+            # 3. DISPLAY TABLE EXACTLY LIKE THE IMAGE
             st.success(f"Calculation Complete. Applicable Rate: ₹{da_rate}")
-            st.subheader("Date-wise DA Calculation Table")
+            st.subheader("Date-wise DA Breakdown")
             
-            # Create a focused view of the calculation
-            calc_view = base_df[[
-                "2. Departure Date",
+            # Create a specific view matching the image columns
+            da_display_df = base_df[[
+                "2. Departure Date", 
                 "14. Days of daily allowance receivable (Hrs)", 
                 "15. Daily allowance rate (Rs.)", 
                 "16. Amount of Allowance (Rs.)"
             ]].copy()
             
-            st.table(calc_view)
+            # Rename columns to match the image exactly
+            da_display_df.columns = [
+                "Date", 
+                "Days of daily allowance receivable", 
+                "Daily allowance rate (Rs.)", 
+                "Amount of Allowance (Rs.)"
+            ]
+            
+            # Use st.table for the exact look requested
+            st.table(da_display_df)
             
             # Save to session for Section II
             st.session_state['processed_da_df'] = base_df
