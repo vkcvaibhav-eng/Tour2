@@ -15,14 +15,14 @@ if 'ta_rearranged_df' not in st.session_state:
     st.warning("⚠️ No TA data found. Please complete the previous TA rearranging steps first.")
     st.stop()
 
-# --- CRITICAL FIX: EXACT COLUMN NAMES MATCHING STEP 2 ---
+# --- FIXED COLUMN NAMES TO MATCH STEP 2 ---
 COL_NAMES = [
     "1. Departure Place", "2. Departure Date", "3. Departure Time",
     "4. Arrival Place", "5. Arrival Date", "6. Arrival Time",
     "7. Mode", "8. Class", "9. Ticket Price/Rate (Rs.)",
     "10. Actual Total Amount of Ticket (Rs.)", 
     "11. KM", 
-    "12. Rate (Rs.) (Auto/Taxi/Pvt)", # Fixed to match Step 2
+    "12. Rate (Rs.) (Auto/Taxi/Pvt)", # Corrected Name
     "13. Total (Rs.)", 
     "14. Days of Daily Allowance receivable (Hrs)", 
     "15. Daily Allowance Rate (Rs.)", 
@@ -52,14 +52,14 @@ def calculate_intelligent_da(df, da_rate):
     """Calculates DA based on total absence and tour continuity."""
     df = df.copy()
     
-    # Pre-filling new columns to avoid IndexErrors
+    # SAFETY: Pre-fill all expected columns to prevent KeyError
     for col in COL_NAMES:
         if col not in df.columns:
-            df[col] = ""
+            df[col] = 0.0 if "Rs." in col else ""
 
     # Parse datetimes
-    df['start_dt'] = pd.to_datetime(df['1. Departure Place'].astype(str).map(lambda x: '') + df['2. Departure Date'].astype(str) + ' ' + df['3. Departure Time'].astype(str), errors='coerce')
-    df['end_dt'] = pd.to_datetime(df['4. Arrival Place'].astype(str).map(lambda x: '') + df['5. Arrival Date'].astype(str) + ' ' + df['6. Arrival Time'].astype(str), errors='coerce')
+    df['start_dt'] = pd.to_datetime(df['2. Departure Date'].astype(str) + ' ' + df['3. Departure Time'].astype(str), errors='coerce')
+    df['end_dt'] = pd.to_datetime(df['5. Arrival Date'].astype(str) + ' ' + df['6. Arrival Time'].astype(str), errors='coerce')
     
     df = df.sort_values('start_dt')
 
@@ -81,7 +81,7 @@ def calculate_intelligent_da(df, da_rate):
     for idx, row in df.iterrows():
         row_date = pd.to_datetime(row['2. Departure Date']).date()
         
-        # Default blanks
+        # Default blanks for DA columns
         df.at[idx, "14. Days of Daily Allowance receivable (Hrs)"] = ""
         df.at[idx, "15. Daily Allowance Rate (Rs.)"] = 0.0
         df.at[idx, "16. Amount of Allowance (Rs.)"] = 0.0
@@ -121,11 +121,12 @@ da_rate_input = st.number_input("Confirmed DA Rate (Rs.)", value=600)
 if st.button("🚀 Calculate Final DA Table"):
     input_df = st.session_state['ta_rearranged_df'].copy()
     
-    # Ensure Column 18 exists from Step 2
+    # Ensure Column 18 exists
     if "18. Purpose of Journey" not in input_df.columns:
         input_df["18. Purpose of Journey"] = ""
 
     with st.spinner("Applying S.119 rules..."):
+        # The function will now handle column initialization internally
         final_table = calculate_intelligent_da(input_df, da_rate_input)
         
         st.subheader("Final Master TA/DA Table (Columns 1-18)")
