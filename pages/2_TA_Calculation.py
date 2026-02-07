@@ -16,7 +16,7 @@ if not api_key:
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 # --- DATA IMPORT FROM STEP 2 ---
 if 'ta_rearranged_df' not in st.session_state:
@@ -198,3 +198,4 @@ if 'processed_da_df' in st.session_state:
     )
 else:
     st.info("Please perform the calculation in Section I first.")
+
