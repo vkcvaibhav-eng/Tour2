@@ -74,34 +74,26 @@ def extract_data_from_documents(uploaded_files):
     progress_bar.empty()
     return results
 
-# --- FIXED VALIDATION FUNCTION ---
 def validate_against_rules(table_df, salary_file, rules_file):
-    # Switched to 1.5-flash as 3-preview is not standard yet
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     table_json = table_df.to_json(orient="records")
     
-    # 1. Prepare Salary File
+    # --- FIX STARTS HERE ---
+    # Convert Streamlit UploadedFile objects into the format Gemini expects (blob + mime_type)
     salary_part = {
         "mime_type": salary_file.type,
         "data": salary_file.getvalue()
     }
     
-    # 2. Prepare Rules File
     rules_part = {
         "mime_type": rules_file.type,
         "data": rules_file.getvalue()
     }
+    # --- FIX ENDS HERE ---
 
-    prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. 
-    Table: {table_json}. 
+    prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
     
-    Instructions:
-    1. Check if 'Class' and 'Ticket Price' are allowed based on the Salary Slip level.
-    2. If everything is correct, start your response with 'VALIDATED'.
-    3. If there are issues, list them clearly.
-    """
-    
-    # Pass processed parts, avoiding TypeError
+    # Pass the processed 'parts' instead of the raw files
     response = model.generate_content([prompt, salary_part, rules_part])
     return response.text
 
@@ -148,12 +140,12 @@ if 'ta_rearranged_df' not in st.session_state:
     ta_df.columns = ALL_COLS
     st.session_state['ta_rearranged_df'] = ta_df
 
-# ==========================================
-# 🆕 SECTION 2: MANUAL PRICE/KM UPDATE
+# # ==========================================
+# 🆕 CORRECTED SECTION: MANUAL PRICE/KM UPDATE
 # ==========================================
 st.subheader("2. Manual Update (If AI Missed Price)")
 with st.expander("Click here to manually set Price or KM for a specific journey"):
-    # Create a unique list of journeys (Date + From -> To)
+    # Create a unique list of journeys (Date + From -> To) to prevent selecting wrong row
     journey_options = st.session_state['ta_rearranged_df'].apply(
         lambda x: f"{x[COL2]} | {x[COL1]} to {x[COL4]}", axis=1
     ).tolist()
@@ -165,10 +157,13 @@ with st.expander("Click here to manually set Price or KM for a specific journey"
     new_km = col_km.number_input("Enter Manual KM (Col 11)", min_value=0.0, step=1.0, key="man_km")
     
     if st.button("✅ Apply Manual Update to Table"):
+        # Find the exact index based on the label we created
         idx = journey_options.index(selected_label)
         
+        # Update the values in the session state dataframe
         if new_price > 0:
             st.session_state['ta_rearranged_df'].at[idx, COL9] = new_price
+            # Also update the calculated column 10 immediately
             st.session_state['ta_rearranged_df'].at[idx, COL10] = new_price
             
         if new_km > 0:
@@ -205,59 +200,28 @@ if COL9 in edited_ta.columns:
     st.session_state['ta_rearranged_df'] = edited_ta
 
 # ==========================================
-# 📑 SECTION 4: AI RULE VALIDATION & DOWNLOAD
+# 📑 SECTION 4: AI RULE VALIDATION
 # ==========================================
 st.divider()
 st.subheader("4. AI Policy Validation (Rules & Salary Slip)")
-
 col_a, col_b = st.columns(2)
-with col_a: 
-    sal_up = st.file_uploader("Upload Salary Slip", type=['pdf','png','jpg'], key="salary_val")
-with col_b: 
-    rules_up = st.file_uploader("Upload TA Rules", type=['pdf','txt'], key="rules_val")
+with col_a: sal_up = st.file_uploader("Upload Salary Slip", type=['pdf','png','jpg'], key="salary_val")
+with col_b: rules_up = st.file_uploader("Upload TA Rules", type=['pdf','txt'], key="rules_val")
 
-# 1. Run the Audit
 if st.button("⚖️ Run AI Audit"):
     if not sal_up or not rules_up:
         st.error("Please upload both documents for validation.")
     else:
-        with st.spinner("Validating against policies..."):
-            # Run the validation function
-            report_text = validate_against_rules(edited_ta, sal_up, rules_up)
-            
-            # SAVE to session state so it persists
-            st.session_state['audit_report_log'] = report_text
-            
-            # Determine Pass/Fail based on keyword
-            if "VALIDATED" in report_text.upper():
-                st.session_state['audit_passed'] = True
-                st.toast("✅ Audit Passed!", icon="🎉")
+        with st.spinner("Validating..."):
+            report = validate_against_rules(edited_ta, sal_up, rules_up)
+            if "VALIDATED" in report.upper():
+                st.success(report); st.session_state['audit_passed'] = True
             else:
-                st.session_state['audit_passed'] = False
-                st.toast("⚠️ Audit Issues Found", icon="Vk")
+                st.error("Policy Disparity Detected:"); st.info(report); st.session_state['audit_passed'] = False
 
-# 2. Display & Download (Persistent)
-if 'audit_report_log' in st.session_state:
-    st.info("📝 Audit Results:")
-    
-    # Show report in a text box
-    st.text_area("Full Audit Report", st.session_state['audit_report_log'], height=200)
-    
-    # Download Button
-    st.download_button(
-        label="📥 Download Report as Text",
-        data=st.session_state['audit_report_log'],
-        file_name=f"TA_Audit_Report_{datetime.now().strftime('%Y%m%d')}.txt",
-        mime="text/plain"
-    )
-
-    # Show success/fail message
-    if st.session_state.get('audit_passed'):
-        st.success("Result: APPROVED via AI Check")
-    else:
-        st.error("Result: ACTION REQUIRED - Please check the issues above.")
-
-# 3. Navigation
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
+
+
