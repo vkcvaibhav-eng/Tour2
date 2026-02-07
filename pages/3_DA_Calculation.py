@@ -18,8 +18,8 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# Using gemini-1.5-pro for document reasoning
-model = genai.GenerativeModel('gemini-1.5-pro')
+# Using gemini-3-pro-preview for document reasoning
+model = genai.GenerativeModel('gemini-3-pro-preview')
 
 # --- DATA PERSISTENCE ---
 if 'ta_rearranged_df' not in st.session_state:
