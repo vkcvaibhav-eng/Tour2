@@ -13,10 +13,50 @@ st.set_page_config(layout="wide", page_title="Step 5: Final Gujarati Export")
 st.title("🇮🇳 Step 5: Final Gujarati Export (A2 Size)")
 st.markdown("---")
 
-# --- DATA CONNECTION ---
+# --- DATA CONNECTION & MERGING LOGIC ---
 if 'final_18_col_df' in st.session_state:
-    df_ta = st.session_state['final_18_col_df']
+    df_ta = st.session_state['final_18_col_df'].copy() # Use copy to avoid setting with copy warning
     st.success(f"✅ Connected to Step 4 Final Table: {len(df_ta)} rows loaded.")
+    
+    # ---------------------------------------------------------
+    # NEW: LOGIC TO FILL COLUMN 18 (PURPOSE) FROM TOUR DIARY PAGE 1
+    # ---------------------------------------------------------
+    # Check if Tour Diary data exists in session state (adjust key 'tour_data' if yours is named differently)
+    if 'tour_data' in st.session_state:
+        st.info("🔄 Found Tour Diary Data... Attempting to merge Purpose of Journey date-wise.")
+        
+        try:
+            diary_df = st.session_state['tour_data']
+            
+            # 1. Create a dictionary mapping: { Date_String : Purpose_Text }
+            # Assuming Diary Column 0 is Date and Column 1 is Purpose/Activity
+            # We strip whitespace to ensure '01-01-2024 ' matches '01-01-2024'
+            purpose_map = dict(zip(
+                diary_df.iloc[:, 0].astype(str).str.strip(), 
+                diary_df.iloc[:, 1].astype(str).str.strip()
+            ))
+            
+            # 2. Update Column 18 (Index 17) in the Final Table
+            # We look at Column 2 (Index 1 - Departure Date) to find the match
+            def get_purpose(row):
+                dept_date = str(row.iloc[1]).strip() # Get Departure Date
+                return purpose_map.get(dept_date, "") # Return Purpose if found, else empty
+
+            # Apply the function to fill Index 17
+            df_ta.iloc[:, 17] = df_ta.apply(get_purpose, axis=1)
+            
+            st.success("✅ Column 18 (Purpose) successfully populated from Tour Diary!")
+            
+            # Optional: Show preview
+            with st.expander("Preview Merged Data"):
+                st.dataframe(df_ta.iloc[:, [1, 17]].head()) # Show Date and Purpose cols
+                
+        except Exception as e:
+            st.error(f"⚠️ Could not auto-fill Purpose: {e}")
+    else:
+        st.warning("⚠️ 'tour_data' not found in session state. Column 18 will be empty.")
+    # ---------------------------------------------------------
+
 elif 'final_ta_data' in st.session_state:
     df_ta = st.session_state['final_ta_data']
     st.warning("⚠️ Using raw Step 2 data. (Tip: Run Step 4 for the fully merged table).")
@@ -238,7 +278,8 @@ def create_gujarati_doc(ta_data):
             total_claim += row_total
 
             # 8. Purpose & Remarks
-            format_cell_text(new_row[17], get_val(17)) # Purpose
+            # This is now populated from the DataFrame because of the Merge Logic above!
+            format_cell_text(new_row[17], get_val(17)) # Purpose (Index 17 is Col 18)
             format_cell_text(new_row[18], "") # Remarks (Blank for user to fill)
 
     # --- FINAL TOTAL ROW ---
