@@ -12,10 +12,8 @@ st.title("💰 Step 3: Daily Allowance (DA) Calculation")
 st.markdown("### Based on Statute S.119 & Uploaded Salary Slip")
 
 # --- 1. SETUP & VALIDATION ---
-# Check if Step 2 (TA Calculation) is done
-if 'final_ta_data' not in st.session_state or st.session_state['final_ta_data'].empty:
-    st.warning("⚠️ No TA Calculation data found. Please complete 'Step 2: TA Calculation' first.")
-    st.info("This step requires the table with Columns 1-13 generated in the previous step.")
+if 'raw_diary_df' not in st.session_state or st.session_state['raw_diary_df'].empty:
+    st.warning("⚠️ No Tour Diary found. Please complete 'Step 1: Tour Diary' first.")
     st.stop()
 
 api_key = st.session_state.get('gemini_api_key')
@@ -83,7 +81,7 @@ if salary_slip and st.sidebar.button("🪄 Auto-detect Rates from Slip"):
             }}
             """
             
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3-flash-preview')
             response = model.generate_content([rate_prompt, *files_to_send])
             
             # Parse response
@@ -112,16 +110,14 @@ da_rate_hotel = st.sidebar.number_input(
 )
 
 # --- 4. CALCULATION ENGINE ---
-st.subheader("Generate Final Calculation Table (Cols 1-16)")
+st.subheader("Generate Calculation")
 
 col1, col2 = st.columns([1, 4])
-if col1.button("🤖 Calculate Columns 14, 15, 16"):
-    with st.spinner("Merging TA Data with DA Rules..."):
+if col1.button("🤖 Calculate DA with AI"):
+    with st.spinner("Applying Rules to Tour Diary..."):
         try:
-            # Prepare Step 2 Data (TA Table)
-            # We assume the dataframe from Step 2 has columns 1 to 13.
-            ta_df = st.session_state['final_ta_data']
-            ta_json = ta_df.to_json(orient='records', date_format='iso')
+            # Prepare Diary Data
+            diary_json = st.session_state['raw_diary_df'].to_json(orient='records', date_format='iso')
             
             # Prepare Context Files (Rules)
             input_content = []
@@ -140,44 +136,42 @@ if col1.button("🤖 Calculate Columns 14, 15, 16"):
             # Construct Prompt
             prompt = f"""
             You are an accountant for an Agricultural University in Gujarat. 
-            I have a Tour Diary table with Columns 1 to 13 filled (Ticket/Journey details).
-            
-            **YOUR TASK:**
-            Reconstruct the table and **add Columns 14, 15, and 16** based on Statute S.119 DA Rules.
+            Calculate the Daily Allowance (DA) for the following Tour Diary.
 
-            **INPUT DATA (Columns 1-13):**
-            {ta_json}
+            **INPUT DATA (Tour Diary):**
+            {diary_json}
 
-            **DA RATES:**
-            - Ordinary Rate: ₹{da_rate_ordinary}
-            - Special/Hotel Rate: ₹{da_rate_hotel}
+            **USER RATES (Derived from Salary Slip):**
+            - Ordinary Rate (100%): ₹{da_rate_ordinary}
+            - Special/Hotel Rate (100%): ₹{da_rate_hotel}
 
-            **LOGIC FOR NEW COLUMNS:**
-            
-            1. **Analyze Duration**: Look at "Departure Date/Time" and "Arrival Date/Time" for each row to understand the time spent.
-               - Note: Usually DA is claimed for the *Halt* at the destination or the *Day* of travel.
-               
-            2. **Column 14: Days of daily allowance receivable**
-               - Calculate hours absent/spent for that specific line item.
-               - < 6 Hours: Write "0.3"
-               - 6 to 12 Hours: Write "0.5"
-               - > 12 Hours: Write "1.0"
-               - If it is a return journey returning to HQ on the same day, sum the hours.
-            
-            3. **Column 15: Daily allowance rate (Rs.)**
-               - Look at the "Arrival Place" (Col 4) or "Departure Place" (Col 1) depending on where the time was spent.
-               - Use {da_rate_hotel} if it is a Major City (Ahmedabad, Surat, Bangalore, etc.) or Rules PDF.
-               - Use {da_rate_ordinary} for other places.
-               
-            4. **Column 16: Amount of Allowance (Rs.)**
-               - Calculate: (Value of Col 14) * (Value of Col 15).
-               - Example: 0.5 * 1000 = 500.
+            **RULES TO APPLY:**
+            1. **Absence Duration (Per Day):**
+               - < 6 hours: 30%
+               - 6 to 12 hours: 50%
+               - > 12 hours: 100%
+            2. **City Classification:**
+               {rules_instruction}
+               - If the 'Place of Halt' is a Special City/Corporation Area, use Special Rate. Else use Ordinary.
 
-            **OUTPUT FORMAT:**
-            Return a JSON array where EVERY object has the original columns PLUS:
-            - "14. Days of daily allowance receivable" (Number: 0.3, 0.5, or 1.0)
-            - "15. Daily allowance rate (Rs.)" (Number)
-            - "16. Amount of Allowance (Rs.)" (Number)
+            **INSTRUCTIONS:**
+            1. Analyze the tour row by row.
+            2. Calculate hours absent for each date.
+            3. Determine if the Halt Place warrants Special or Ordinary rate.
+            4. Calculate the final amount.
+
+            **REQUIRED JSON OUTPUT FORMAT:**
+            [
+              {{
+                "Date": "DD-MM-YYYY",
+                "Place": "Name of City/Place",
+                "Rate_Type": "Ordinary" or "Special",
+                "Applicable_Rate": {da_rate_ordinary} or {da_rate_hotel},
+                "Hours_Claimed": "Number of hours",
+                "Percentage": "30%" or "50%" or "100%",
+                "DA_Amount": "Calculated Amount"
+              }}
+            ]
             """
             
             input_content.insert(0, prompt)
@@ -192,52 +186,37 @@ if col1.button("🤖 Calculate Columns 14, 15, 16"):
             data = json.loads(cleaned_text)
             
             # Create DataFrame
-            df_final = pd.DataFrame(data)
+            df_da = pd.DataFrame(data)
             
             # Save to Session
-            st.session_state['final_da_data'] = df_final
-            st.success("✅ Merged TA + DA Calculation Complete!")
+            st.session_state['final_da_data'] = df_da
+            st.success("✅ Calculation Complete!")
             
         except Exception as e:
             st.error(f"Error during calculation: {e}")
 
 # --- 5. EDIT & REVIEW ---
 if 'final_da_data' in st.session_state:
-    st.subheader("Review Final Combined Table (Cols 1-16)")
-    st.markdown("This table merges your Journey Details (TA) with your Daily Allowance (DA).")
+    st.subheader("Review & Edit DA Claims")
     
     # Allow editing
     edited_da_df = st.data_editor(
         st.session_state['final_da_data'],
         num_rows="dynamic",
         use_container_width=True,
-        key="final_da_editor",
+        key="da_editor",
         column_config={
-            "14. Days of daily allowance receivable": st.column_config.NumberColumn("14. DA Days (0.3/0.5/1)", format="%.1f"),
-            "15. Daily allowance rate (Rs.)": st.column_config.NumberColumn("15. Rate (Rs.)", format="%.2f"),
-            "16. Amount of Allowance (Rs.)": st.column_config.NumberColumn("16. DA Amount (Rs.)", format="%.2f"),
+            "DA_Amount": st.column_config.NumberColumn("DA Amount (₹)", format="%.2f"),
+            "Applicable_Rate": st.column_config.NumberColumn("Rate Base (₹)", format="%.2f"),
         }
     )
     
     # Update Session State
     st.session_state['final_da_data'] = edited_da_df
     
-    # Calculate Grand Totals
-    # We sum Col 13 (TA Total) and Col 16 (DA Total)
-    
-    total_ta_claim = 0
-    total_da_claim = 0
-    
-    if "13. Total (Rs.)" in edited_da_df.columns:
-        total_ta_claim = pd.to_numeric(edited_da_df["13. Total (Rs.)"], errors='coerce').sum()
-        
-    if "16. Amount of Allowance (Rs.)" in edited_da_df.columns:
-        total_da_claim = pd.to_numeric(edited_da_df["16. Amount of Allowance (Rs.)"], errors='coerce').sum()
-
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Total Transport (Col 13)", f"₹ {total_ta_claim:,.2f}")
-    col_b.metric("Total DA (Col 16)", f"₹ {total_da_claim:,.2f}")
-    col_c.metric("GRAND TOTAL CLAIM", f"₹ {total_ta_claim + total_da_claim:,.2f}")
+    # Summary Metrics
+    total_da = pd.to_numeric(edited_da_df['DA_Amount'], errors='coerce').sum()
+    st.metric(label="Total Daily Allowance Claim", value=f"₹ {total_da:,.2f}")
 
     st.markdown("---")
-    st.write("👉 **Next Step:** Go to '4_Export' to generate your final document.")
+    st.write("👉 **Next Step:** Go to '4_Export' to generate your document.")
