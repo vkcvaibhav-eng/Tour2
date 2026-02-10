@@ -224,24 +224,28 @@ if 'final_18_col_df' in st.session_state:
         key='download-csv'
     )
 
-    # Simple Excel Download (Using Pandas)
+   # Simple Excel Download (Using openpyxl, which is already installed)
     buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    # CHANGE: Use 'openpyxl' instead of 'xlsxwriter'
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         edited_final.to_excel(writer, sheet_name='Claim Sheet', index=False)
         
-        # Auto-adjust columns width
+        # Auto-adjust columns width (adjusted for openpyxl)
         worksheet = writer.sheets['Claim Sheet']
         for idx, col in enumerate(edited_final.columns):
             max_len = max(
                 edited_final[col].astype(str).map(len).max(),
                 len(str(col))
             ) + 2
-            worksheet.set_column(idx, idx, max_len)
+            # openpyxl uses letters for columns (A, B, C...)
+            col_letter = chr(65 + idx) if idx < 26 else 'A' + chr(65 + (idx - 26)) 
+            worksheet.column_dimensions[col_letter].width = max_len
             
     st.download_button(
         label="Download as Excel",
         data=buffer.getvalue(),
         file_name="Final_TA_DA_Claim.xlsx",
-        mime="application/vnd.ms-excel"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
