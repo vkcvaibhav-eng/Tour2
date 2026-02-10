@@ -10,13 +10,14 @@ from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Step 5: Final Gujarati Export")
 st.title("🇮🇳 Step 5: Final Gujarati Export (A2 Size)")
+
 st.markdown("---")
-st.info("Generates the final 1-19 column table with Gujarati Headers and English Data.")
+st.info("Generates the 1-19 column table on a 42cm x 59.4cm page, using the exact headers from your sample.")
 
 # --- HELPER FUNCTIONS ---
 
 def set_cell_margins(cell, top=0, start=0, bottom=0, end=0):
-    """Removes margins from table cells to fit more text."""
+    """Removes margins from table cells to fit text tightly."""
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
@@ -27,213 +28,126 @@ def set_cell_margins(cell, top=0, start=0, bottom=0, end=0):
         tcMar.append(node)
     tcPr.append(tcMar)
 
-def create_gujarati_doc(ta_data, da_data):
+def format_header_cell(cell, text, font_size=9, bold=True):
+    """Formats a header cell with specific font and alignment."""
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
+    run.text = text
+    run.font.bold = bold
+    run.font.size = Pt(font_size)
+    run.font.name = 'Arial Unicode MS'  # Crucial for Gujarati
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+def create_gujarati_table(ta_data):
     doc = Document()
     
-    # 1. SETUP PAGE SIZE (A2: 42cm x 59.4cm)
+    # 1. SETUP PAGE SIZE (A2 Portrait: 42cm x 59.4cm)
     section = doc.sections[0]
     section.page_width = Cm(42)
     section.page_height = Cm(59.4)
     
-    # Margins (Narrow to fit 19 columns)
+    # Narrow margins to maximize table space
     section.left_margin = Cm(1.0)
     section.right_margin = Cm(1.0)
-    section.top_margin = Cm(1.5)
-    section.bottom_margin = Cm(1.5)
+    section.top_margin = Cm(1.0)
+    section.bottom_margin = Cm(1.0)
 
-    # 2. TITLE SECTION (Gujarati)
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Arial Unicode MS'  # Standard for Gujarati
-    font.size = Pt(11)
-
+    # 2. DOCUMENT TITLE
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("મુસાફરી ભથ્થાનું બિલ (TA/DA Bill)")
+    run = p.add_run("મુસાફરી ભથ્થાનું બિલ (Travelling Allowance Bill)")
     run.bold = True
-    run.font.size = Pt(22)
+    run.font.size = Pt(20)
+    run.font.name = 'Arial Unicode MS'
 
-    # Employee Info Placeholders
-    info_p = doc.add_paragraph()
-    info_p.add_run("\nકર્મચારીનું નામ: _______________________      હોદ્દો: _______________________\n")
-    info_p.add_run("હેડ ક્વાર્ટર: _______________________           પગાર: _______________________\n")
-
-    # 3. CREATE THE 19-COLUMN TABLE
+    # 3. CREATE 19-COLUMN TABLE
     table = doc.add_table(rows=3, cols=19)
     table.style = 'Table Grid'
     table.autofit = False 
     
-    # Set rough column widths
-    for col in table.columns:
-        col.width = Cm(2.1) 
+    # Set Column Widths (Approximation to fit 40cm width)
+    # Date/Time cols are small, Place is med, Amounts are small
+    widths = [1.8, 1.8, 1.5, 1.8, 1.8, 1.5, 1.5, 1.5, 1.5, 2.0, 1.5, 1.5, 2.0, 1.5, 1.5, 2.0, 1.5, 2.0, 2.5]
+    for i, width in enumerate(widths):
+        if i < 19:
+            for row in table.rows:
+                row.cells[i].width = Cm(width)
 
-    # --- HEADERS (Gujarati) ---
-    # Row 1: Main Group Headers
-    # Row 2: Sub Headers
-    # Row 3: Column Numbers (1-19)
+    # --- ROW 1: MAIN HEADERS (Merged) ---
+    # Merge cells for grouped headers
+    # 0-2 (Depart), 3-5 (Arrive), 6 (Mode), 7 (Class), 8 (Ticket No), 9 (Fare), 
+    # 10-12 (Road Details), 13 (Road Amt), 14-17 (DA), 18 (Total) -- Adjusting to map 19 cols exactly
     
-    # Row 1 Cells (Merged Groups)
-    r1 = table.rows[0].cells
-    # Departure (1-3)
-    r1[0].text = "ઉપડ્યા (Departure)"
-    r1[0].merge(r1[2])
-    # Arrival (4-6)
-    r1[3].text = "પહોંચ્યા (Arrival)"
-    r1[3].merge(r1[5])
-    # Mode/Class (7-8)
-    r1[6].text = "વિગત (Detail)"
-    r1[6].merge(r1[8])
-    # Fare (9-10)
-    r1[9].text = "ભાડું (Fare)"
-    # Road (11-13)
-    r1[10].text = "રોડ મુસાફરી (Road Travel)"
-    r1[10].merge(r1[12])
-    # DA (14-18)
-    r1[13].text = "દૈનિક ભથ્થું (Daily Allowance)"
-    r1[13].merge(r1[17])
-    # Total (19)
-    r1[18].text = "કુલ (Total)"
+    # Header Mapping based on your request (1-19)
+    # 1,2,3: Depart | 4,5,6: Arrive | 7: Mode | 8: Class | 9: Tkt No | 10: Fare 
+    # 11: KM | 12: Rate | 13: Road Amt | 14: Days | 15: Rate | 16: Amt | 17: Less | 18: Net DA | 19: Grand Total
+    
+    row1 = table.rows[0].cells
+    
+    # Merges
+    row1[0].merge(row1[2])  # Departure
+    row1[3].merge(row1[5])  # Arrival
+    
+    format_header_cell(row1[0], "ઉપડ્યા (Departure)")
+    format_header_cell(row1[3], "પહોંચ્યા (Arrival)")
+    format_header_cell(row1[6], "વાહન\n(Mode)")
+    format_header_cell(row1[7], "વર્ગ\n(Class)")
+    format_header_cell(row1[8], "ટિકિટ નં/દર\n(Tkt No)")
+    format_header_cell(row1[9], "ભાડું (A)\n(Fare)")
+    format_header_cell(row1[10], "રોડ કિમી\n(Road KM)")
+    format_header_cell(row1[11], "દર\n(Rate)")
+    format_header_cell(row1[12], "રોડ રકમ (B)\n(Road Amt)")
+    format_header_cell(row1[13], "દિવસો\n(Days)")
+    format_header_cell(row1[14], "દર\n(Rate)")
+    format_header_cell(row1[15], "રકમ\n(Amount)")
+    format_header_cell(row1[16], "કપાત\n(Less)")
+    format_header_cell(row1[17], "કુલ DA (C)\n(Net DA)")
+    format_header_cell(row1[18], "કુલ રકમ (A+B+C)\n(Grand Total)")
 
-    # Row 2 Cells (Specific Titles)
-    r2 = table.rows[1].cells
-    titles_guj = [
-        "સ્થળ", "તારીખ", "સમય",          # 1-3
-        "સ્થળ", "તારીખ", "સમય",          # 4-6
-        "વાહન", "વર્ગ", "ટિકિટ નં",     # 7-9
-        "રકમ (A)",                      # 10
-        "કિ.મી.", "દર", "રકમ (B)",      # 11-13
-        "દિવસ", "દર", "રકમ", "કપાત", "ચોખ્ખી (C)", # 14-18
-        "રકમ (A+B+C)"                   # 19
+    # --- ROW 2: SUB HEADERS ---
+    row2 = table.rows[1].cells
+    sub_headers = [
+        "સ્થળ\n(Place)", "તારીખ\n(Date)", "સમય\n(Time)",
+        "સ્થળ\n(Place)", "તારીખ\n(Date)", "સમય\n(Time)",
+        "", "", "", "Rs.",
+        "KM", "Rs.", "Rs.",
+        "No.", "Rs.", "Rs.", "Rs.", "Rs.", "Rs."
     ]
     
-    for i, title in enumerate(titles_guj):
-        r2[i].text = title
+    for i, text in enumerate(sub_headers):
+        format_header_cell(row2[i], text, font_size=8, bold=False)
 
-    # Row 3 Cells (Numbers 1-19)
-    r3 = table.rows[2].cells
+    # --- ROW 3: COLUMN NUMBERS (1 to 19) ---
+    row3 = table.rows[2].cells
     for i in range(19):
-        r3[i].text = str(i + 1)
-        
-    # Formatting Headers
-    for row in [table.rows[0], table.rows[1], table.rows[2]]:
-        for cell in row.cells:
-            p = cell.paragraphs[0]
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            if p.runs:
-                p.runs[0].font.bold = True
-                p.runs[0].font.size = Pt(9)
+        format_header_cell(row3[i], str(i + 1), font_size=10, bold=True)
 
-    # --- POPULATE DATA (English) ---
-    grand_total_claim = 0.0
+    # --- POPULATE DATA (Row 4 onwards) ---
+    # We pull directly from st.session_state['final_ta_data']
+    
+    grand_total_sum = 0.0
 
     if not ta_data.empty:
         for idx, row in ta_data.iterrows():
             new_row = table.add_row().cells
             
-            # --- 1-3: Departure ---
-            new_row[0].text = str(row.get("1. Departure Place", ""))
-            new_row[1].text = str(row.get("2. Departure Date", ""))
-            new_row[2].text = str(row.get("3. Departure Time", ""))
+            # Helper to safely get string
+            def get_val(col_name):
+                return str(row.get(col_name, ""))
             
-            # --- 4-6: Arrival ---
-            new_row[3].text = str(row.get("4. Arrival Place", ""))
-            new_row[4].text = str(row.get("5. Arrival Date", ""))
-            new_row[5].text = str(row.get("6. Arrival Time", ""))
-            
-            # --- 7-9: Details ---
-            new_row[6].text = str(row.get("7. Mode", ""))
-            new_row[7].text = str(row.get("8. Class", ""))
-            # Assuming Ticket No is not in standard dataframe, using blank or placeholder
-            new_row[8].text = "" 
-            
-            # --- 10: Ticket Fare (A) ---
-            tkt_amt = pd.to_numeric(row.get("10. Actual Total Amount of Ticket (Rs.)", 0), errors='coerce')
-            if pd.isna(tkt_amt): tkt_amt = 0
-            new_row[9].text = f"{tkt_amt:.2f}" if tkt_amt > 0 else "-"
-            
-            # --- 11-13: Road (B) ---
-            km = pd.to_numeric(row.get("11. KM", 0), errors='coerce')
-            rate = pd.to_numeric(row.get("12. Rate (Rs.) (Auto/Taxi/Pvt)", 0), errors='coerce')
-            
-            road_amt = 0
-            if km > 0 and rate > 0:
-                road_amt = km * rate
-            
-            # Override if "13. Total" exists and is different
-            calc_13 = pd.to_numeric(row.get("13. Total (Rs.)", 0), errors='coerce')
-            if calc_13 > 0: road_amt = calc_13
+            # Helper to safely get float
+            def get_float(col_name):
+                try:
+                    return float(row.get(col_name, 0))
+                except:
+                    return 0.0
 
-            new_row[10].text = f"{km:.1f}" if km > 0 else "-"
-            new_row[11].text = f"{rate:.1f}" if rate > 0 else "-"
-            new_row[12].text = f"{road_amt:.2f}" if road_amt > 0 else "-"
+            # 1-3 Departure
+            new_row[0].text = get_val("1. Departure Place")
+            new_row[1].text = get_val("2. Departure Date")
+            new_row[2].text = get_val("3. Departure Time")
             
-            # --- 14-18: DA (C) ---
-            # Try to match DA data if available, otherwise leave blank for manual fill
-            da_days = ""
-            da_rate = ""
-            da_amt = 0
-            da_less = 0
-            da_net = 0 # This is Column 18
-            
-            # Simple Logic: If this row has a DA Claim in the separate dataframe, add it.
-            # (Here we assume row-by-row matching isn't perfect, so we leave blank or fill 0)
-            # You can manually fill these columns in the Word doc.
-            
-            new_row[13].text = da_days
-            new_row[14].text = da_rate
-            new_row[15].text = "-"
-            new_row[16].text = "-"
-            new_row[17].text = "-" # Col 18 (Net DA)
-            
-            # --- 19: Total (A+B+C) -> (10 + 13 + 18) ---
-            row_total = tkt_amt + road_amt + da_net
-            new_row[18].text = f"{row_total:.2f}"
-            
-            grand_total_claim += row_total
-            
-            # Center Align Data
-            for cell in new_row:
-                p = cell.paragraphs[0]
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.style.font.size = Pt(10)
-                set_cell_margins(cell, top=50, bottom=50)
-
-    # --- SUMMARY ROW ---
-    sum_row = table.add_row().cells
-    sum_row[0].text = "GRAND TOTAL"
-    sum_row[18].text = f"₹ {grand_total_claim:.2f}"
-    
-    # Merge label cells
-    sum_row[0].merge(sum_row[17]) 
-    sum_row[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    sum_row[0].paragraphs[0].runs[0].bold = True
-
-    return doc
-
-# --- MAIN UI ---
-
-if st.button("📄 Generate Gujarati 1-19 A2 Doc"):
-    if 'final_ta_data' in st.session_state:
-        
-        ta_df = st.session_state['final_ta_data']
-        da_df = st.session_state.get('final_da_data', pd.DataFrame())
-
-        try:
-            doc = create_gujarati_doc(ta_df, da_df)
-            
-            buffer = BytesIO()
-            doc.save(buffer)
-            buffer.seek(0)
-            
-            st.download_button(
-                label="⬇️ Download Gujarati_1to19_A2.docx",
-                data=buffer,
-                file_name="Gujarati_TA_Bill_A2_Final.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-            st.success("✅ Document generated! Headers in Gujarati, Data in English. (Size: A2)")
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
-    else:
-        st.error("⚠️ No TA Data found. Please complete Step 2 first.")
+            # 4-6 Arrival
+            new_row[3].text = get_val("4. Arrival Place")
+            new_row[4].text = get_val("5. Arrival Date")
