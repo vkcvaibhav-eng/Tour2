@@ -1,247 +1,245 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
-import json
-import io
+from docx import Document
+from docx.shared import Cm, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from io import BytesIO
 
-# ==========================================
-# ⚙️ CONFIGURATION & SETUP
-# ==========================================
-st.set_page_config(layout="wide", page_title="Step 4: Final Consolidated Table")
-st.title("📑 Step 4: Final Consolidated Claim Table")
-st.markdown("### Merging TA & DA into the Official 1-18 Column Format")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(layout="wide", page_title="Step 5: Final Gujarati Export")
+st.title("🇮🇳 Step 5: Final Gujarati Export (A2 Size)")
+st.markdown("---")
 
-# --- VALIDATION ---
-if 'ta_rearranged_df' not in st.session_state:
-    st.error("⚠️ Step 2 (TA Calculation) is missing. Please complete it first.")
-    st.stop()
+# --- DATA CONNECTION (Connects to Step 4 Data) ---
+# We retrieve the data directly from the session state used in Step 4
+if 'final_ta_data' in st.session_state:
+    df_ta = st.session_state['final_ta_data']
+    st.success(f"✅ Connected to Final Table: {len(df_ta)} rows loaded.")
+else:
+    st.warning("⚠️ No data found from Step 4. Please complete previous steps first.")
+    df_ta = pd.DataFrame()
 
-if 'final_da_data' not in st.session_state:
-    st.warning("⚠️ Step 3 (DA Calculation) is missing. The table will be generated without DA values.")
+if 'final_da_data' in st.session_state:
+    df_da = st.session_state['final_da_data']
+else:
+    df_da = pd.DataFrame()
 
-api_key = st.session_state.get('gemini_api_key')
-if not api_key:
-    st.error("⚠️ Gemini API Key not found. Please set it in the Home page.")
-    st.stop()
+# --- HELPER FUNCTIONS FOR WORD ---
 
-genai.configure(api_key=api_key)
+def set_cell_margins(cell, top=10, start=10, bottom=10, end=10):
+    """Sets custom margins for a cell to fit more text."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcMar = OxmlElement('w:tcMar')
+    for m, val in [('top', top), ('start', start), ('bottom', bottom), ('end', end)]:
+        node = OxmlElement(f'w:{m}')
+        node.set(qn('w:w'), str(val))
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
+    tcPr.append(tcMar)
 
-# ==========================================
-# 🧠 AI MERGING LOGIC
-# ==========================================
+def format_cell_text(cell, text, font_size=9, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
+    """Formats text inside a cell with Arial Unicode MS for Gujarati support."""
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = align
+    run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
+    run.text = str(text)
+    run.font.bold = bold
+    run.font.size = Pt(font_size)
+    run.font.name = 'Arial Unicode MS'  # Required for Gujarati
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-def ai_smart_merge(ta_df, da_df, api_key):
-    """
-    Uses Gemini to intelligently merge TA (Travel) rows with DA (Daily) rows
-    because DA is often 1 per day while TA can be multiple per day.
-    """
+def create_gujarati_doc(ta_data, da_data):
+    doc = Document()
     
-    # Convert DataFrames to JSON for the prompt
-    ta_json = ta_df.to_json(orient="records")
-    da_json = da_df.to_json(orient="records") if da_df is not None else "[]"
-    
-    prompt = f"""
-    You are an expert Data Processing Assistant for Government Travel Claims.
-    
-    **TASK:**
-    Merge the "Transport Allowance (TA)" data with the "Daily Allowance (DA)" data into a single final table with exactly 18 columns.
-    
-    **INPUT DATA:**
-    1. **TA Data (Journey Rows):** {ta_json}
-    
-    2. **DA Data (Daily/Halt Rows):** {da_json}
-    
-    **REQUIRED COLUMNS (1 to 18):**
-    1. Departure Place
-    2. Departure Date
-    3. Departure Time
-    4. Arrival Place
-    5. Arrival Date
-    6. Arrival Time
-    7. Mode
-    8. Class
-    9. Ticket Price/Rate (Rs.)
-    10. Actual Total Amount of Ticket (Rs.)
-    11. KM
-    12. Rate (Rs.) (Auto/Taxi/Pvt)
-    13. Total (Rs.) [Vehicle/Fare]
-    14. Days of daily allowance receivable (or Hours)
-    15. Daily allowance rate (Rs.)
-    16. Amount of Allowance (Rs.) [The calculated DA amount]
-    17. Total amount receivable (Col 10 + Col 13 + Col 16)
-    18. Purpose of Journey
-    
-    **MERGING LOGIC:**
-    - The TA Data contains the rows for every journey. **Keep all these rows.**
-    - The DA Data contains calculated amounts usually per day or per halt.
-    - **Intelligently assign** the DA values (Cols 14, 15, 16) to the relevant travel row (usually the row where the traveler arrives at the halt location for that date).
-    - If a date has multiple journeys, usually the DA is added to the last arrival of that day or the main halt.
-    - Ensure Col 17 is the mathematical sum of 10, 13, and 16.
-    - **CRITICAL:** Col 18 (Purpose of Journey) MUST be taken directly from the TA Data provided. Do not alter the text of the purpose.
-    
-    **OUTPUT FORMAT:**
-    Return ONLY valid JSON: a list of objects where keys are the numbered column names (e.g., "1. Departure Place", "17. Total amount receivable...").
-    """
-    
-    # Using gemini-1.5-pro for high reasoning capability as requested
-    model_name = "gemini-3-pro-preview" 
-    
-    try:
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        
-        # Clean JSON
-        text = response.text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-            
-        return json.loads(text)
-    except Exception as e:
-        st.error(f"AI Merging Failed: {e}")
-        return []
+    # 1. PAGE SETUP: A2 PORTRAIT (42cm x 59.4cm)
+    section = doc.sections[0]
+    section.page_width = Cm(42)
+    section.page_height = Cm(59.4)
+    section.left_margin = Cm(1.27)
+    section.right_margin = Cm(1.27)
+    section.top_margin = Cm(1.27)
+    section.bottom_margin = Cm(1.27)
 
-# ==========================================
-# 🖥️ PAGE UI
-# ==========================================
+    # 2. TITLE
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("મુસાફરી ભથ્થાનું બિલ (Travelling Allowance Bill)")
+    run.bold = True
+    run.font.size = Pt(22)
+    run.font.name = 'Arial Unicode MS'
 
-# 1. Preview Inputs
-with st.expander("🔍 View Input Data (TA & DA)"):
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("TA Data (Step 2)")
-        st.dataframe(st.session_state['ta_rearranged_df'])
-    with c2:
-        st.subheader("DA Data (Step 3)")
-        if 'final_da_data' in st.session_state:
-            st.dataframe(st.session_state['final_da_data'])
-        else:
-            st.info("No DA Data available.")
-
-# 2. Action Button
-st.divider()
-col_center = st.columns([1, 2, 1])
-if col_center[1].button("🚀 Generate Final 1-18 Column Table (AI Merge)", type="primary"):
-    with st.spinner("AI is merging rows, aligning dates, and calculating totals..."):
-        
-        # --- PREPARE DATA ---
-        ta_df = st.session_state['ta_rearranged_df'].copy()
-        
-        # --- ENFORCE PURPOSE FROM STEP 1 (TOUR DIARY) ---
-        # We explicitly grab the Purpose column from Step 1 if available to ensure accuracy.
-        if 'raw_diary_df' in st.session_state:
-            diary_df = st.session_state['raw_diary_df']
-            
-            # Identify the Purpose column in the original diary
-            # It might be named "Purpose" or "18. Purpose of Journey"
-            purpose_col_source = next((c for c in diary_df.columns if "Purpose" in str(c)), None)
-            
-            if purpose_col_source and len(diary_df) == len(ta_df):
-                # Force the column into the TA Data before AI processing
-                ta_df["18. Purpose of Journey"] = diary_df[purpose_col_source].values
-        
-        da_df = st.session_state.get('final_da_data', None)
-        
-        # Call AI
-        merged_data = ai_smart_merge(ta_df, da_df, api_key)
-        
-        if merged_data:
-            st.session_state['final_18_col_df'] = pd.DataFrame(merged_data)
-            st.success("✅ Merging Complete!")
-        else:
-            st.error("Failed to generate table.")
-
-# 3. Display & Edit
-if 'final_18_col_df' in st.session_state:
-    st.subheader("📝 Final Consolidated Claim Form")
+    # 3. CREATE TABLE (19 Columns)
+    table = doc.add_table(rows=3, cols=19)
+    table.style = 'Table Grid'
+    table.autofit = False 
     
-    # Define exact column order for display
-    final_cols = [
-        "1. Departure Place", "2. Departure Date", "3. Departure Time",
-        "4. Arrival Place", "5. Arrival Date", "6. Arrival Time",
-        "7. Mode", "8. Class", 
-        "9. Ticket Price/Rate (Rs.)", "10. Actual Total Amount of Ticket (Rs.)",
-        "11. KM", "12. Rate (Rs.) (Auto/Taxi/Pvt)", "13. Total (Rs.)",
-        "14. Days of daily allowance receivable", "15. Daily allowance rate (Rs.)",
-        "16. Amount of Allowance (Rs.)",
-        "17. Total amount receivable (10 + 13 + 16)",
-        "18. Purpose of Journey"
+    # Column Widths (Adjusted for A2 width ~39cm usable)
+    # 1-6 (Dates/Times) = 1.8cm
+    # 7-8 (Mode/Class) = 1.5cm
+    # 9-19 (Amounts) = Mixed
+    widths = [
+        1.8, 1.8, 1.5,   # 1,2,3 Depart
+        1.8, 1.8, 1.5,   # 4,5,6 Arrive
+        1.8, 1.5,        # 7 Mode, 8 Class
+        1.5, 2.0,        # 9 Tkt No, 10 Fare
+        1.5, 1.5, 2.0,   # 11 KM, 12 Rate, 13 Road Amt
+        1.5, 1.5, 2.0,   # 14 Days, 15 Rate, 16 Amt
+        1.5, 2.0, 2.5    # 17 Less, 18 DA Tot, 19 Total
     ]
     
-    df_final = st.session_state['final_18_col_df']
-    
-    # Ensure columns match mainly for the editor
-    # (AI might return slightly different keys, so we normalize if needed, 
-    # but usually the prompt handles it. We'll trust the editor to show what it got.)
-    
-    # Force Recalculation of Col 17 to ensure Math Accuracy (Python > AI for math)
-    # We strip currency symbols if present
-    def clean_money(val):
-        if isinstance(val, str):
-            val = val.replace('₹', '').replace(',', '').strip()
-        return pd.to_numeric(val, errors='coerce') if val else 0.0
+    # Apply widths
+    for row in table.rows:
+        for idx, width in enumerate(widths):
+            if idx < 19:
+                row.cells[idx].width = Cm(width)
 
-    try:
-        # Map AI keys to standard keys if they slightly differ, strictly relying on index if names fail
-        # This is a robust fallback if AI names keys "Col 1", "Col 2" etc.
-        if len(df_final.columns) == 18:
-            df_final.columns = final_cols
+    # --- ROW 1: TOP HEADERS (Merged) ---
+    r1 = table.rows[0].cells
+    
+    # Merge Logic
+    r1[0].merge(r1[2])  # Depart
+    r1[3].merge(r1[5])  # Arrive
+    
+    # Set Text (Gujarati + English)
+    format_cell_text(r1[0], "ઉપડ્યા (Departure)", bold=True, font_size=10)
+    format_cell_text(r1[3], "પહોંચ્યા (Arrival)", bold=True, font_size=10)
+    format_cell_text(r1[6], "મુસાફરીનો પ્રકાર\n(Mode)", bold=True)
+    format_cell_text(r1[7], "વર્ગ\n(Class)", bold=True)
+    format_cell_text(r1[8], "ટિકિટ નં\n(Ticket No)", bold=True)
+    format_cell_text(r1[9], "ભાડું (A)\n(Fare Rs.)", bold=True)
+    format_cell_text(r1[10], "રોડ કિમી\n(Road KM)", bold=True)
+    format_cell_text(r1[11], "દર\n(Rate)", bold=True)
+    format_cell_text(r1[12], "રોડ રકમ (B)\n(Road Amt)", bold=True)
+    format_cell_text(r1[13], "દિવસો\n(DA Days)", bold=True)
+    format_cell_text(r1[14], "દર\n(DA Rate)", bold=True)
+    format_cell_text(r1[15], "રકમ\n(Amount)", bold=True)
+    format_cell_text(r1[16], "કપાત\n(Less)", bold=True)
+    format_cell_text(r1[17], "કુલ DA (C)\n(Net DA)", bold=True)
+    format_cell_text(r1[18], "કુલ રકમ (A+B+C)\n(Grand Total)", bold=True)
+
+    # --- ROW 2: SUB HEADERS ---
+    r2 = table.rows[1].cells
+    sub_headers = [
+        "સ્થળ (Place)", "તારીખ (Date)", "સમય (Time)",
+        "સ્થળ (Place)", "તારીખ (Date)", "સમય (Time)",
+        "", "", "", "Rs.",
+        "KM", "Rs.", "Rs.",
+        "Days", "Rs.", "Rs.", "Rs.", "Rs.", "Rs."
+    ]
+    for i, txt in enumerate(sub_headers):
+        format_cell_text(r2[i], txt, font_size=8)
+
+    # --- ROW 3: COLUMN NUMBERS (1-19) ---
+    r3 = table.rows[2].cells
+    for i in range(19):
+        format_cell_text(r3[i], str(i+1), bold=True)
+
+    # --- ROW 4+: DATA FILLING ---
+    # We iterate through the TA Dataframe
+    
+    total_claim = 0.0
+
+    if not ta_data.empty:
+        for index, row in ta_data.iterrows():
+            new_row = table.add_row().cells
             
-        # Math Safety Check
-        c10 = df_final["10. Actual Total Amount of Ticket (Rs.)"].apply(clean_money).fillna(0)
-        c13 = df_final["13. Total (Rs.)"].apply(clean_money).fillna(0)
-        c16 = df_final["16. Amount of Allowance (Rs.)"].apply(clean_money).fillna(0)
-        df_final["17. Total amount receivable (10 + 13 + 16)"] = c10 + c13 + c16
-    except Exception as e:
-        st.warning(f"Auto-math validation skipped due to column mismatch: {e}")
+            # Helper for safe numeric conversion
+            def get_num(key):
+                try:
+                    return float(row.get(key, 0))
+                except:
+                    return 0.0
 
-    edited_final = st.data_editor(
-        df_final,
-        use_container_width=True,
-        num_rows="dynamic",
-        height=600,
-        key="final_grid"
-    )
-    
-    st.session_state['final_18_col_df'] = edited_final
+            # 1-3 Departure
+            format_cell_text(new_row[0], row.get("1. Departure Place", ""))
+            format_cell_text(new_row[1], row.get("2. Departure Date", ""))
+            format_cell_text(new_row[2], row.get("3. Departure Time", ""))
 
-    # 4. Totals
-    st.divider()
-    total_receivable = edited_final["17. Total amount receivable (10 + 13 + 16)"].sum()
-    st.metric("💰 GRAND TOTAL CLAIM", f"₹ {total_receivable:,.2f}")
+            # 4-6 Arrival
+            format_cell_text(new_row[3], row.get("4. Arrival Place", ""))
+            format_cell_text(new_row[4], row.get("5. Arrival Date", ""))
+            format_cell_text(new_row[5], row.get("6. Arrival Time", ""))
 
-    # 5. Export
-    st.subheader("📥 Export")
-    
-    # CSV Download
-    csv = edited_final.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "Download as CSV",
-        csv,
-        "Final_TA_DA_Claim.csv",
-        "text/csv",
-        key='download-csv'
-    )
+            # 7-8 Mode/Class
+            format_cell_text(new_row[6], row.get("7. Mode", ""))
+            format_cell_text(new_row[7], row.get("8. Class", ""))
 
-    # Simple Excel Download (Using Pandas)
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        edited_final.to_excel(writer, sheet_name='Claim Sheet', index=False)
-        
-        # Auto-adjust columns width
-        worksheet = writer.sheets['Claim Sheet']
-        for idx, col in enumerate(edited_final.columns):
-            max_len = max(
-                edited_final[col].astype(str).map(len).max(),
-                len(str(col))
-            ) + 2
-            worksheet.set_column(idx, idx, max_len)
+            # 9 Ticket No / Rate
+            format_cell_text(new_row[8], row.get("9. Ticket Price/Rate (Rs.)", ""))
+
+            # 10 Fare Amount (A)
+            fare_a = get_num("10. Actual Total Amount of Ticket (Rs.)")
+            format_cell_text(new_row[9], f"{fare_a:.2f}")
+
+            # 11-13 Road Amount (B)
+            km = get_num("11. KM")
+            rate = get_num("12. Rate (Rs.) (Auto/Taxi/Pvt)")
             
-    st.download_button(
-        label="Download as Excel",
-        data=buffer.getvalue(),
-        file_name="Final_TA_DA_Claim.xlsx",
-        mime="application/vnd.ms-excel"
-    )
+            # Calculate Road Amt (B)
+            road_b = km * rate
+            if road_b == 0: road_b = get_num("13. Total (Rs.)") # Fallback
+            
+            format_cell_text(new_row[10], f"{km:.1f}" if km else "-")
+            format_cell_text(new_row[11], f"{rate:.1f}" if rate else "-")
+            format_cell_text(new_row[12], f"{road_b:.2f}")
 
+            # 14-18 DA Amount (C)
+            # Try to fetch DA data if it exists in the row, otherwise 0
+            # (Assuming standard names or matching if you merged previously)
+            da_days = get_num("DA_Days")
+            da_rate = get_num("DA_Rate")
+            da_c = get_num("DA_Amount") # Net DA
+            
+            format_cell_text(new_row[13], f"{da_days}" if da_days else "")
+            format_cell_text(new_row[14], f"{da_rate}" if da_rate else "")
+            format_cell_text(new_row[15], f"{da_days*da_rate:.2f}" if da_days and da_rate else "") # Gross DA
+            format_cell_text(new_row[16], "") # Less
+            format_cell_text(new_row[17], f"{da_c:.2f}" if da_c else "")
+
+            # 19 Grand Total (A + B + C)
+            row_total = fare_a + road_b + da_c
+            format_cell_text(new_row[18], f"{row_total:.2f}", bold=True)
+
+            total_claim += row_total
+            
+            # Visual padding
+            for cell in new_row:
+                set_cell_margins(cell, top=50, bottom=50)
+
+    # --- TOTAL ROW ---
+    tot_row = table.add_row().cells
+    tot_row[0].merge(tot_row[9]) # Merge first 10 cells
+    format_cell_text(tot_row[0], "કુલ સરવાળો (Grand Total)", bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT)
+    
+    # Fill Total in Column 19
+    format_cell_text(tot_row[18], f"₹ {total_claim:.2f}", bold=True)
+
+    return doc
+
+# --- MAIN UI ---
+st.info("The table below matches the 1-19 column structure with Gujarati headers.")
+
+if st.button("📄 Generate & Download Final A2 File"):
+    if not df_ta.empty:
+        try:
+            doc = create_gujarati_doc(df_ta, df_da)
+            
+            buffer = BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            
+            st.download_button(
+                label="⬇️ Download Gujarati_Final_A2.docx",
+                data=buffer,
+                file_name="Gujarati_Final_A2.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            st.balloons()
+        except Exception as e:
+            st.error(f"Error generating file: {e}")
+    else:
+        st.error("Data is empty. Please check Step 2.")
