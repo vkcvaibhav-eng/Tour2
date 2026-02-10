@@ -14,6 +14,8 @@ st.markdown("### Based on Statute S.119 & Uploaded Salary Slip")
 # --- 1. SETUP & VALIDATION ---
 if 'raw_diary_df' not in st.session_state or st.session_state['raw_diary_df'].empty:
     st.warning("⚠️ No Tour Diary found. Please complete 'Step 1: Tour Diary' first.")
+    # For testing purposes, uncomment the line below to create dummy data if needed
+    # st.session_state['raw_diary_df'] = pd.DataFrame([{"Date": "2023-10-01", "Place": "Ahmedabad", "Hours": 14}, {"Date": "2023-10-02", "Place": "Navsari", "Hours": 5}])
     st.stop()
 
 api_key = st.session_state.get('gemini_api_key')
@@ -81,7 +83,7 @@ if salary_slip and st.sidebar.button("🪄 Auto-detect Rates from Slip"):
             }}
             """
             
-            model = genai.GenerativeModel('gemini-3-flash-preview')
+            model = genai.GenerativeModel('gemini-1.5-flash') # Updated to stable model
             response = model.generate_content([rate_prompt, *files_to_send])
             
             # Parse response
@@ -104,96 +106,117 @@ da_rate_ordinary = st.sidebar.number_input(
 )
 
 da_rate_hotel = st.sidebar.number_input(
-    "Hotel/Special DA Rate (₹)", 
+    "Hotel/Special DA Rate (₹) [Tier-1 Cities]", 
     min_value=0, 
     value=st.session_state['detected_hotel_rate']
 )
 
-# --- 4. CALCULATION ENGINE ---
+# --- 4. CALCULATION ENGINE WITH AUDIT ---
 st.subheader("Generate Calculation")
 
 col1, col2 = st.columns([1, 4])
-if col1.button("🤖 Calculate DA with AI"):
-    with st.spinner("Applying Rules to Tour Diary..."):
+if col1.button("🤖 Calculate DA with AI Audit"):
+    
+    # 1. PREPARE DATA
+    diary_json = st.session_state['raw_diary_df'].to_json(orient='records', date_format='iso')
+    
+    # Prepare Context Files (Rules)
+    files_for_calc = []
+    
+    if da_rules_pdf:
+        gemini_rules_main = upload_to_gemini(da_rules_pdf)
+        files_for_calc.append(gemini_rules_main)
+        rules_instruction = "Refer strictly to the attached DA Rules PDF for City Classifications (Tier-1/Corporation areas)."
+    else:
+        # Fallback hardcoded rules for Gujarat/Agri Universities
+        rules_instruction = """
+        Use standard Gujarat Govt / Agricultural University rules for City Tiers:
+        - **Tier 1 (Special Rate):** Ahmedabad, Surat, Vadodara, Rajkot, Bhavnagar, Jamnagar, Gandhinagar, Mumbai, Delhi, Bangalore, Chennai, Kolkata, Hyderabad.
+        - **Tier 2 (Ordinary Rate):** All other villages, talukas, and smaller towns.
+        """
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    # ----------------------------------------
+    # PHASE 1: INITIAL CALCULATION
+    # ----------------------------------------
+    with st.status("🤖 Phase 1: Identifying Locations & Rates...", expanded=True) as status:
         try:
-            # Prepare Diary Data
-            diary_json = st.session_state['raw_diary_df'].to_json(orient='records', date_format='iso')
-            
-            # Prepare Context Files (Rules)
-            input_content = []
-            
-            if da_rules_pdf:
-                gemini_rules_main = upload_to_gemini(da_rules_pdf)
-                input_content.append(gemini_rules_main)
-                rules_instruction = "Refer strictly to the attached DA Rules PDF for City Classifications (Tier-1/Corporation areas)."
-            else:
-                rules_instruction = """
-                Use standard Gujarat Agricultural University rules:
-                - Tier 1 Cities (Special Rate): Ahmedabad, Surat, Vadodara, Rajkot, Mumbai, Delhi, Bangalore, etc.
-                - Others: Ordinary Rate.
-                """
+            prompt_phase_1 = f"""
+            You are an Accountant. Calculate DA for the following Tour Diary.
 
-            # Construct Prompt
-            prompt = f"""
-            You are an accountant for an Agricultural University in Gujarat. 
-            Calculate the Daily Allowance (DA) for the following Tour Diary.
-
-            **INPUT DATA (Tour Diary):**
+            **INPUT DATA:**
             {diary_json}
 
-            **USER RATES (Derived from Salary Slip):**
-            - Ordinary Rate (100%): ₹{da_rate_ordinary}
-            - Special/Hotel Rate (100%): ₹{da_rate_hotel}
+            **RATES:**
+            - Ordinary Rate: ₹{da_rate_ordinary}
+            - Special (Tier-1) Rate: ₹{da_rate_hotel}
 
-            **RULES TO APPLY:**
-            1. **Absence Duration (Per Day):**
-               - < 6 hours: 30%
-               - 6 to 12 hours: 50%
-               - > 12 hours: 100%
-            2. **City Classification:**
-               {rules_instruction}
-               - If the 'Place of Halt' is a Special City/Corporation Area, use Special Rate. Else use Ordinary.
+            **LOGIC:**
+            1. **Identify Location Tier:** Check the 'Place' column. If it is a Tier-1 city (Corporation area/Metro), use Special Rate. Otherwise, use Ordinary Rate. {rules_instruction}
+            2. **Calculate %:** <6 hrs = 30%, 6-12 hrs = 50%, >12 hrs = 100%.
+            3. **Calculate Amount:** Rate * %.
+
+            Return ONLY a valid JSON List.
+            """
+            
+            response_1 = model.generate_content([prompt_phase_1, *files_for_calc])
+            clean_json_1 = response_1.text.replace("```json", "").replace("```", "").strip()
+            draft_data = json.loads(clean_json_1)
+            
+            status.write("✅ Phase 1 Complete. Initiating Audit...")
+
+            # ----------------------------------------
+            # PHASE 2: AI AUDIT (SELF-CORRECTION)
+            # ----------------------------------------
+            status.update(label="🕵️ Phase 2: Auditing for Errors...", state="running")
+            
+            prompt_audit = f"""
+            You are a Senior Auditor. Review this Draft DA Claim for errors.
+
+            **DRAFT CLAIM:**
+            {json.dumps(draft_data)}
+
+            **AUDIT RULES:**
+            1. **Location Check:** Did the previous AI miss any Tier-1 cities? (e.g., if Place is 'Ahmedabad' but Rate used was {da_rate_ordinary}, CHANGE it to {da_rate_hotel}).
+            2. **Math Check:** Ensure Rate * Percentage = Amount is mathematically perfect.
+            3. **Logic Check:** Ensure <6 hours is strictly 30% (0.3).
 
             **INSTRUCTIONS:**
-            1. Analyze the tour row by row.
-            2. Calculate hours absent for each date.
-            3. Determine if the Halt Place warrants Special or Ordinary rate.
-            4. Calculate the final amount.
-
-            **REQUIRED JSON OUTPUT FORMAT:**
+            - If you find errors, FIX THEM in the JSON.
+            - If correct, return the JSON as is.
+            - Return ONLY the final corrected JSON List.
+            
+            **REQUIRED OUTPUT FORMAT:**
             [
               {{
                 "Date": "DD-MM-YYYY",
-                "Place": "Name of City/Place",
+                "Place": "Name",
                 "Rate_Type": "Ordinary" or "Special",
-                "Applicable_Rate": {da_rate_ordinary} or {da_rate_hotel},
-                "Hours_Claimed": "Number of hours",
+                "Applicable_Rate": <number>,
+                "Hours_Claimed": <number/string>,
                 "Percentage": "30%" or "50%" or "100%",
-                "DA_Amount": "Calculated Amount"
+                "DA_Amount": <calculated_amount>,
+                "Audit_Note": "Verified" or "Fixed rate for Tier-1 city"
               }}
             ]
             """
             
-            input_content.insert(0, prompt)
-
-            # Call Gemini
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-3-flash-preview')
-            response = model.generate_content(input_content)
-            
-            # Parse JSON
-            cleaned_text = response.text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(cleaned_text)
-            
-            # Create DataFrame
-            df_da = pd.DataFrame(data)
+            response_audit = model.generate_content([prompt_audit]) # No files needed for audit, just logic
+            clean_json_audit = response_audit.text.replace("```json", "").replace("```", "").strip()
+            final_data = json.loads(clean_json_audit)
             
             # Save to Session
+            df_da = pd.DataFrame(final_data)
             st.session_state['final_da_data'] = df_da
-            st.success("✅ Calculation Complete!")
             
+            status.update(label="✅ Audit Complete!", state="complete", expanded=False)
+            st.success("Calculation verified and corrected by AI Auditor.")
+
         except Exception as e:
-            st.error(f"Error during calculation: {e}")
+            st.error(f"Error during calculation/audit: {e}")
+            st.stop()
 
 # --- 5. EDIT & REVIEW ---
 if 'final_da_data' in st.session_state:
@@ -208,6 +231,7 @@ if 'final_da_data' in st.session_state:
         column_config={
             "DA_Amount": st.column_config.NumberColumn("DA Amount (₹)", format="%.2f"),
             "Applicable_Rate": st.column_config.NumberColumn("Rate Base (₹)", format="%.2f"),
+            "Audit_Note": st.column_config.TextColumn("AI Audit Note", disabled=True),
         }
     )
     
