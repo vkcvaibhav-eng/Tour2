@@ -85,8 +85,8 @@ def ai_smart_merge(ta_df, da_df, api_key):
     
     # Using the requested high-reasoning model tag (or fallback to 1.5 Pro if generic)
     # The user asked for "gemini-3-pro-preview" specifically. 
-    # Note: If this model name is not yet active in your account, switch to "gemini-1.5-pro".
-    model_name = "gemini-1.5-pro" 
+    # Note: If this model name is not yet active in your account, switch to "gemini-3-pro-preview".
+    model_name = "gemini-3-pro-preview" 
     
     try:
         model = genai.GenerativeModel(model_name)
@@ -229,3 +229,4 @@ if 'final_18_col_df' in st.session_state:
         file_name="Final_TA_DA_Claim.xlsx",
         mime="application/vnd.ms-excel"
     )
+
