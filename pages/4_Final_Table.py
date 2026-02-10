@@ -77,16 +77,14 @@ def ai_smart_merge(ta_df, da_df, api_key):
     - **Intelligently assign** the DA values (Cols 14, 15, 16) to the relevant travel row (usually the row where the traveler arrives at the halt location for that date).
     - If a date has multiple journeys, usually the DA is added to the last arrival of that day or the main halt.
     - Ensure Col 17 is the mathematical sum of 10, 13, and 16.
-    - Ensure Col 18 (Purpose) is filled for every row (take from TA data).
+    - **CRITICAL:** Col 18 (Purpose of Journey) MUST be taken directly from the TA Data provided. Do not alter the text of the purpose.
     
     **OUTPUT FORMAT:**
     Return ONLY valid JSON: a list of objects where keys are the numbered column names (e.g., "1. Departure Place", "17. Total amount receivable...").
     """
     
-    # Using the requested high-reasoning model tag (or fallback to 1.5 Pro if generic)
-    # The user asked for "gemini-3-pro-preview" specifically. 
-    # Note: If this model name is not yet active in your account, switch to "gemini-3-pro-preview".
-    model_name = "gemini-3-pro-preview" 
+    # Using gemini-1.5-pro for high reasoning capability as requested
+    model_name = "gemini-1.5-pro" 
     
     try:
         model = genai.GenerativeModel(model_name)
@@ -126,9 +124,26 @@ st.divider()
 col_center = st.columns([1, 2, 1])
 if col_center[1].button("🚀 Generate Final 1-18 Column Table (AI Merge)", type="primary"):
     with st.spinner("AI is merging rows, aligning dates, and calculating totals..."):
-        ta_df = st.session_state['ta_rearranged_df']
+        
+        # --- PREPARE DATA ---
+        ta_df = st.session_state['ta_rearranged_df'].copy()
+        
+        # --- ENFORCE PURPOSE FROM STEP 1 (TOUR DIARY) ---
+        # We explicitly grab the Purpose column from Step 1 if available to ensure accuracy.
+        if 'raw_diary_df' in st.session_state:
+            diary_df = st.session_state['raw_diary_df']
+            
+            # Identify the Purpose column in the original diary
+            # It might be named "Purpose" or "18. Purpose of Journey"
+            purpose_col_source = next((c for c in diary_df.columns if "Purpose" in str(c)), None)
+            
+            if purpose_col_source and len(diary_df) == len(ta_df):
+                # Force the column into the TA Data before AI processing
+                ta_df["18. Purpose of Journey"] = diary_df[purpose_col_source].values
+        
         da_df = st.session_state.get('final_da_data', None)
         
+        # Call AI
         merged_data = ai_smart_merge(ta_df, da_df, api_key)
         
         if merged_data:
@@ -229,4 +244,3 @@ if 'final_18_col_df' in st.session_state:
         file_name="Final_TA_DA_Claim.xlsx",
         mime="application/vnd.ms-excel"
     )
-
