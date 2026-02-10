@@ -64,10 +64,21 @@ def extract_data_from_documents(uploaded_files):
             image_data = file.getvalue()
             image_parts = [{"mime_type": file.type, "data": image_data}]
             
-            # Updated to gemini-1.5-pro for higher reasoning accuracy as requested
-            model = genai.GenerativeModel('ggemini-3-pro-preview') 
+            # Use Gemini 1.5 Pro for high accuracy in reading Mode/Class from receipts
+            model = genai.GenerativeModel('gemini-1.5-pro') 
             
-            prompt = "Analyze this Travel Ticket carefully. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
+            # UPGRADED PROMPT: Specifically asks for Mode and Class to map correctly
+            prompt = """
+            Analyze this Travel Ticket/Bill. Extract the following details accurately:
+            1. Date (DD/MM/YYYY)
+            2. Mode (Train, Bus, Flight, Auto, Taxi, Car)
+            3. Class (e.g., 2nd AC, Sleeper, General, Economy, or 'Road' for taxi)
+            4. Total Amount (Price)
+            5. KM (if mentioned on taxi bill)
+            
+            Return ONLY a valid JSON list like this: 
+            [{"date": "12/03/2024", "mode": "Bus", "class": "Sleeper", "amount": 1200, "km": 0}]
+            """
             response = model.generate_content([prompt, image_parts[0]])
             text = response.text.strip()
             if "```json" in text: text = text.split("```json")[1].split("```")[0]
@@ -80,29 +91,20 @@ def extract_data_from_documents(uploaded_files):
     return results
 
 def validate_against_rules(table_df, salary_file, rules_file):
-    # Updated to gemini-1.5-pro for higher reasoning accuracy
-    model = genai.GenerativeModel('gemini-3-pro-preview')
+    model = genai.GenerativeModel('gemini-1.5-pro')
     table_json = table_df.to_json(orient="records")
     
-    salary_part = {
-        "mime_type": salary_file.type,
-        "data": salary_file.getvalue()
-    }
-    
-    rules_part = {
-        "mime_type": rules_file.type,
-        "data": rules_file.getvalue()
-    }
+    salary_part = { "mime_type": salary_file.type, "data": salary_file.getvalue() }
+    rules_part = { "mime_type": rules_file.type, "data": rules_file.getvalue() }
 
     prompt = f"""Audit this TA Claim Table against Salary Slip and Rules. Table: {table_json}. If OK, start with 'VALIDATED'."""
-    
     response = model.generate_content([prompt, salary_part, rules_part])
     return response.text
 
 # ==========================================
 # 📥 SECTION 1: UPLOAD & SMART TABLE
 # ==========================================
-st.title("🧮 Step 2: TA Calculation (Logic Corrected)")
+st.title("🧮 Step 2: TA Calculation (Smart Mode Mapping)")
 
 if 'final_tour_diary' not in st.session_state:
     st.error("⚠️ Please complete Step 1 (Tour Diary) first.")
@@ -114,6 +116,7 @@ ticket_files = st.file_uploader("Upload Tickets/Bills (PDF/Images)", accept_mult
 if ticket_files and st.button("🤖 Extract & Merge Ticket Data"):
     with st.spinner("Gemini Pro is reading tickets..."):
         st.session_state['extracted_tickets'] = extract_data_from_documents(ticket_files)
+        # Clear previous table to force re-calculation with new data
         if 'ta_rearranged_df' in st.session_state: del st.session_state['ta_rearranged_df']
         st.success("Tickets extracted! Merging into table...")
         st.rerun()
@@ -122,50 +125,68 @@ st.divider()
 
 # Logic to generate table from diary
 def smart_calculation_logic(row):
-    mode = str(row.get("Mode_of_Travel", "")).lower()
+    # 1. Start with Diary defaults
+    diary_mode = str(row.get("Mode_of_Travel", "")).lower()
     diary_date = str(row.get("Departure_Date", ""))
     
-    # Defaults
-    km = 0.0
-    ticket_rate = 0.0
-    rate_per_km = 0.0
-    total_val = 0.0
-    purpose = row.get("Purpose", "Official") 
-    travel_class = "Express"
-
-    # --- LOGIC SPLIT BASED ON MODE ---
+    # 2. Check for AI Extracted Ticket Match
+    ticket_data = None
+    if 'extracted_tickets' in st.session_state:
+        for t in st.session_state['extracted_tickets']:
+            # Flexible date matching
+            t_date = str(t.get('date', ''))
+            if t_date and (t_date in diary_date or diary_date in t_date):
+                ticket_data = t
+                break
     
-    # CASE A: Public Transport (Train/Bus/Flight) -> Uses Col 9 & 10 ONLY
-    if any(x in mode for x in ['rail', 'train', 'bus', 'flight', 'air']):
-        travel_class = "2nd AC" if "rail" in mode or "train" in mode else "Economy" if "flight" in mode else "Express"
+    # 3. Determine Mode & Class (Prioritize Ticket Data if found)
+    final_mode = diary_mode
+    final_class = "Express"
+    ticket_amount = 0.0
+    km_extracted = 0.0
+    
+    if ticket_data:
+        # If ticket has a mode (e.g., "Bus", "Taxi"), overwrite the diary mode
+        if ticket_data.get('mode'):
+            final_mode = str(ticket_data.get('mode')).lower()
         
-        # Try to find ticket price
-        if 'extracted_tickets' in st.session_state:
-            for t in st.session_state['extracted_tickets']:
-                if str(t.get('date')) in diary_date or diary_date in str(t.get('date')):
-                    ticket_rate = float(t.get('amount', 0))
-                    break
-        
-        # COL 10 gets the value. COL 13 MUST BE ZERO.
-        km = 0.0 
-        rate_per_km = 0.0
-        total_val = 0.0 
-
-    # CASE B: Hired/Private Transport (Auto/Taxi) -> Uses Col 13 ONLY
-    elif any(x in mode for x in ['auto', 'rickshaw', 'taxi', 'car', 'cab']):
-        travel_class = "Road"
-        ticket_rate = 0.0 # Col 9 & 10 must be zero
-        
-        # Get KM
-        km = pd.to_numeric(row.get("KM", 0), errors='coerce')
-        if pd.isna(km) or km == 0:
-            km = try_get_km_from_raw(diary_date, row.get("Departure_Place", ""))
+        if ticket_data.get('class'):
+            final_class = str(ticket_data.get('class'))
             
-        # Set Rate
-        rate_per_km = 12.0 if "auto" in mode else 16.0 
+        ticket_amount = float(ticket_data.get('amount', 0))
+        km_extracted = float(ticket_data.get('km', 0))
+    else:
+        # Fallback Logic if no ticket matched
+        if "rail" in final_mode or "train" in final_mode: final_class = "2nd AC"
+        elif "flight" in final_mode: final_class = "Economy"
+        elif "auto" in final_mode or "taxi" in final_mode: final_class = "Road"
+
+    # 4. Fill Columns based on Final Mode
+    # --- Public Transport (Train/Bus/Flight) ---
+    if any(x in final_mode for x in ['rail', 'train', 'bus', 'flight', 'air', 'metro']):
+        col9_price = ticket_amount
+        col10_total = ticket_amount
+        col11_km = 0.0
+        col12_rate = 0.0
+        col13_total = 0.0
         
-        # COL 13 gets the value. COL 10 MUST BE ZERO.
-        total_val = km * rate_per_km
+    # --- Private Transport (Auto/Taxi/Car) ---
+    elif any(x in final_mode for x in ['auto', 'rickshaw', 'taxi', 'car', 'cab', 'road']):
+        col9_price = 0.0
+        col10_total = 0.0
+        
+        # Use KM from ticket if available, else from diary
+        col11_km = km_extracted if km_extracted > 0 else pd.to_numeric(row.get("KM", 0), errors='coerce')
+        if pd.isna(col11_km): col11_km = 0.0
+        
+        # Determine Rate
+        col12_rate = 12.0 if "auto" in final_mode else 16.0 
+        
+        # Calculate Total immediately
+        col13_total = col11_km * col12_rate
+    else:
+        # Fallback
+        col9_price, col10_total, col11_km, col12_rate, col13_total = 0.0, 0.0, 0.0, 0.0, 0.0
 
     return pd.Series([
         row.get("Departure_Place"), 
@@ -174,14 +195,14 @@ def smart_calculation_logic(row):
         row.get("Arrival_Place"), 
         row.get("Arrival_Date"), 
         row.get("Arrival_Time"), 
-        row.get("Mode_of_Travel"), 
-        travel_class, 
-        ticket_rate,  # Col 9 (Ticket Price)
-        ticket_rate,  # Col 10 (Actual Total Ticket)
-        km,           # Col 11
-        rate_per_km,  # Col 12
-        total_val,    # Col 13 (Only for Auto/Taxi)
-        purpose       # Col 18
+        final_mode.title(), # Col 7
+        final_class,        # Col 8
+        col9_price,         # Col 9
+        col10_total,        # Col 10
+        col11_km,           # Col 11
+        col12_rate,         # Col 12
+        col13_total,        # Col 13
+        row.get("Purpose", "Official") # Col 18
     ])
 
 if 'ta_rearranged_df' not in st.session_state:
@@ -193,33 +214,61 @@ if 'ta_rearranged_df' not in st.session_state:
 # 🆕 SECTION 2: MANUAL PRICE/KM UPDATE
 # ==========================================
 st.subheader("2. Manual Update (Specific Journey)")
-with st.expander("Click here to manually set Price or KM"):
+st.info("ℹ️ Select a journey to update Ticket Price OR Distance parameters.")
+
+# Ensure we have a persistent key for the selection to avoid resetting
+if "selected_journey_index" not in st.session_state:
+    st.session_state["selected_journey_index"] = 0
+
+with st.expander("Click here to manually set Price, KM, or Rate", expanded=True):
     journey_options = st.session_state['ta_rearranged_df'].apply(
-        lambda x: f"{x[COL2]} | {x[COL1]} to {x[COL4]}", axis=1
+        lambda x: f"{x[COL2]} | {x[COL1]} to {x[COL4]} ({x[COL7]})", axis=1
     ).tolist()
     
-    col_sel, col_val, col_km = st.columns([2, 1, 1])
+    col_sel, col_pr, col_km, col_rt = st.columns([3, 1, 1, 1])
     
-    selected_label = col_sel.selectbox("Select Journey", journey_options)
-    new_price = col_val.number_input("Manual Ticket Price (Col 9)", min_value=0.0, step=10.0, key="man_pr")
-    new_km = col_km.number_input("Manual KM (Col 11)", min_value=0.0, step=1.0, key="man_km")
+    selected_label = col_sel.selectbox("Select Journey to Update", journey_options, index=st.session_state["selected_journey_index"])
     
-    if st.button("✅ Apply Update"):
-        idx = journey_options.index(selected_label)
+    # Get current index
+    current_idx = journey_options.index(selected_label)
+    st.session_state["selected_journey_index"] = current_idx # Keep selection stable
+
+    new_price = col_pr.number_input("Ticket Price (Col 9)", min_value=0.0, step=10.0, key="man_pr")
+    new_km = col_km.number_input("Distance KM (Col 11)", min_value=0.0, step=1.0, key="man_km")
+    new_rate = col_rt.number_input("Rate/KM (Col 12)", min_value=0.0, step=1.0, key="man_rt")
+    
+    if st.button("✅ Update & Recalculate"):
+        # Logic: 
+        # 1. If Price is entered -> Clear KM/Rate totals, Set Ticket Totals.
+        # 2. If KM or Rate is entered -> Clear Ticket Totals, Set KM*Rate Totals.
         
         if new_price > 0:
-            st.session_state['ta_rearranged_df'].at[idx, COL9] = new_price
-            st.session_state['ta_rearranged_df'].at[idx, COL10] = new_price 
-            st.session_state['ta_rearranged_df'].at[idx, COL13] = 0.0 # Force Col 13 to 0 if ticket exists
+            st.session_state['ta_rearranged_df'].at[current_idx, COL9] = new_price
+            st.session_state['ta_rearranged_df'].at[current_idx, COL10] = new_price 
+            st.session_state['ta_rearranged_df'].at[current_idx, COL13] = 0.0
+            st.session_state['ta_rearranged_df'].at[current_idx, COL11] = 0.0 # Clear KM
+            st.session_state['ta_rearranged_df'].at[current_idx, COL12] = 0.0 # Clear Rate
+            st.success(f"Updated Ticket Price to ₹{new_price} for {selected_label}")
             
-        if new_km > 0:
-            st.session_state['ta_rearranged_df'].at[idx, COL11] = new_km
-            # Recalculate Col 13 if KM is updated (assuming rate exists)
-            rate = st.session_state['ta_rearranged_df'].at[idx, COL12]
-            st.session_state['ta_rearranged_df'].at[idx, COL13] = new_km * rate
-            st.session_state['ta_rearranged_df'].at[idx, COL10] = 0.0 # Force Col 10 to 0 if KM used
+        elif new_km > 0 or new_rate > 0:
+            # If user enters KM but not rate, try to keep existing rate, else default 12
+            current_rate = st.session_state['ta_rearranged_df'].at[current_idx, COL12]
+            final_rate = new_rate if new_rate > 0 else (current_rate if current_rate > 0 else 12.0)
             
-        st.success(f"Updated journey: {selected_label}")
+            # If user enters Rate but not KM, keep existing KM
+            current_km = st.session_state['ta_rearranged_df'].at[current_idx, COL11]
+            final_km = new_km if new_km > 0 else current_km
+            
+            total_calc = final_km * final_rate
+            
+            st.session_state['ta_rearranged_df'].at[current_idx, COL11] = final_km
+            st.session_state['ta_rearranged_df'].at[current_idx, COL12] = final_rate
+            st.session_state['ta_rearranged_df'].at[current_idx, COL13] = total_calc
+            st.session_state['ta_rearranged_df'].at[current_idx, COL9] = 0.0 # Clear Ticket
+            st.session_state['ta_rearranged_df'].at[current_idx, COL10] = 0.0 # Clear Ticket Total
+            
+            st.success(f"Updated: {final_km} km @ ₹{final_rate}/km = ₹{total_calc}")
+            
         st.rerun()
 
 # ==========================================
@@ -229,24 +278,15 @@ st.subheader("3. Review & Edit TA Table")
 
 df_to_edit = st.session_state['ta_rearranged_df'].copy()
 
-# --- REAL-TIME CALCULATION LOGIC ---
-# Ensure strict separation:
-# If Col 9 (Ticket) > 0: Col 10 = Col 9, Col 13 = 0.
-# Else: Col 10 = 0, Col 13 = Col 11 * Col 12.
-
-# 1. Basic conversions
+# --- REAL-TIME CALCULATION LOGIC (Safety Check) ---
 ticket_price = pd.to_numeric(df_to_edit[COL9], errors='coerce').fillna(0)
 km = pd.to_numeric(df_to_edit[COL11], errors='coerce').fillna(0)
 rate = pd.to_numeric(df_to_edit[COL12], errors='coerce').fillna(0)
-taxi_calc = km * rate
 
-# 2. Logic Application
-# We use numpy where to vectorise the logic: If Ticket > 0, use Ticket for Col 10 and 0 for Col 13.
+# If Ticket Price exists -> Ticket Total = Price, Road Total = 0
+# Else -> Ticket Total = 0, Road Total = KM * Rate
 df_to_edit[COL10] = np.where(ticket_price > 0, ticket_price, 0.0)
-df_to_edit[COL13] = np.where(ticket_price > 0, 0.0, taxi_calc)
-
-# 3. Clean up Col 9 visual if it's meant to be 0 (optional, but keeps table clean)
-df_to_edit[COL9] = np.where(ticket_price > 0, ticket_price, 0.0)
+df_to_edit[COL13] = np.where(ticket_price > 0, 0.0, km * rate)
 
 edited_ta = st.data_editor(
     df_to_edit,
@@ -255,11 +295,11 @@ edited_ta = st.data_editor(
     key="ta_editor_main",
     column_config={
         COL8: st.column_config.SelectboxColumn(COL8, options=["1st AC", "2nd AC", "3rd AC", "CC", "Sleeper", "Economy", "Express", "Road"]),
-        COL9: st.column_config.NumberColumn(COL9, format="₹ %.2f"),
-        COL10: st.column_config.NumberColumn(COL10, format="₹ %.2f", disabled=True, help="Ticket Amount Only"),
-        COL11: st.column_config.NumberColumn(COL11, format="%.1f km"),
-        COL12: st.column_config.NumberColumn(COL12, format="₹ %.2f"),
-        COL13: st.column_config.NumberColumn(COL13, format="₹ %.2f", disabled=True, help="Road Mileage Amount Only"),
+        COL9: st.column_config.NumberColumn(COL9, format="₹ %.2f", help="Enter Ticket Price here"),
+        COL10: st.column_config.NumberColumn(COL10, format="₹ %.2f", disabled=True, help="Calculated Ticket Amount"),
+        COL11: st.column_config.NumberColumn(COL11, format="%.1f km", help="Enter Distance here"),
+        COL12: st.column_config.NumberColumn(COL12, format="₹ %.2f", help="Enter Rate per KM here"),
+        COL13: st.column_config.NumberColumn(COL13, format="₹ %.2f", disabled=True, help="Calculated Road Amount"),
         COL18: st.column_config.TextColumn(COL18, width="medium")
     }
 )
@@ -277,12 +317,11 @@ if COL9 in edited_ta.columns:
     st.session_state['ta_rearranged_df'] = edited_ta
 
 # Show Grand Totals
-# The final claim is SUM(Col 10) + SUM(Col 13) because they are now mutually exclusive
 total_ticket = edited_ta[COL10].sum()
 total_mileage = edited_ta[COL13].sum()
 grand_total = total_ticket + total_mileage
 
-st.info(f"💡 Logic: If a Ticket Price exists (Col 10), Total (Col 13) is set to 0 to avoid double counting. If Ticket is 0, Col 13 shows KM amount.")
+st.info(f"💡 Calculation Logic: Ticket Price (Col 9) takes priority. If Ticket Price is 0, system calculates Distance (Col 11) × Rate (Col 12).")
 
 t_col1, t_col2, t_col3 = st.columns(3)
 t_col1.metric("Train/Bus/Flight Total (Col 10)", f"₹ {total_ticket:.2f}")
@@ -312,4 +351,3 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
-
