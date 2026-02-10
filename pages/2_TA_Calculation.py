@@ -220,34 +220,8 @@ if st.button("⚖️ Run AI Audit"):
                 st.error("Policy Disparity Detected:"); st.info(report); st.session_state['audit_passed'] = False
 
 if st.session_state.get('audit_passed'):
-  if 'temp_ta_data' in st.session_state:
-    st.subheader("Review & Edit (Cols 1-13)")
-    
-    edited_ta_df = st.data_editor(
-        st.session_state['temp_ta_data'],
-        num_rows="dynamic",
-        use_container_width=True,
-        key="ta_editor"
-    )
-    
-    # Recalculate Totals dynamically if user edits
-    # Simple logic: If Col 13 is empty/zero, try to calc it
-    # (You can add more complex logic here if needed)
-    
-    st.markdown("---")
-    
-    # *** CRITICAL SAVE STEP ***
-    col1, col2 = st.columns([1, 1])
-    
-    # Save button forces the data into the 'final_ta_data' key
-    if col1.button("💾 SAVE & FINISH STEP 2"):
-        st.session_state['final_ta_data'] = edited_ta_df
-        st.success("✅ Data Saved! Now go to 'Step 3: DA Calculation'.")
-        
-    # Visual check
-    if 'final_ta_data' in st.session_state:
-        st.info("ready to proceed to Step 3.")
-
+    if st.button("Proceed to DA Calculation ➡️"):
+        st.switch_page("pages/3_DA_Calculation.py")
 
 
 
