@@ -1,194 +1,147 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import google.generativeai as genai
 import json
+import google.generativeai as genai
+from datetime import datetime
 
-# ==========================================
-# ⚙️ CONFIGURATION & SETUP
-# ==========================================
-st.set_page_config(layout="wide", page_title="University TA/DA Calculation System")
-st.title("📅 Step 3: Statutory DA Calculation (Statute S.119)")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(layout="wide", page_title="Step 3: DA Calculation")
+st.title("💰 Step 3: Daily Allowance (DA) Calculation")
+st.markdown("### Based on Statute S.119 (Gujarat Agricultural Universities)")
+
+# --- 1. SETUP & VALIDATION ---
+if 'raw_diary_df' not in st.session_state or st.session_state['raw_diary_df'].empty:
+    st.warning("⚠️ No Tour Diary found. Please complete 'Step 1: Tour Diary' first.")
+    st.stop()
 
 api_key = st.session_state.get('gemini_api_key')
 if not api_key:
-    st.error("⚠️ Gemini API Key not found. Please set it in the Home page.")
+    st.error("⚠️ Gemini API Key missing. Please set it in 'Home'.")
     st.stop()
 
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-3-flash-preview')
+# --- 2. USER INPUTS FOR RATES ---
+st.sidebar.header("Configuration")
+st.sidebar.info("Statute S.119 requires your applicable Daily Allowance rate.")
 
-# --- DATA IMPORT FROM STEP 2 ---
-if 'ta_rearranged_df' not in st.session_state:
-    st.warning("⚠️ No TA data found from Step 2. Please complete TA Calculation first.")
-    st.stop()
+# User inputs their eligible rate per day
+da_rate_ordinary = st.sidebar.number_input(
+    "Ordinary DA Rate (₹)", 
+    min_value=0, 
+    value=500, 
+    help="Your eligible DA for ordinary places."
+)
 
-# Master Column Structure
-COL_NAMES = [
-    "1. Departure Place", "2. Departure Date", "3. Departure Time",
-    "4. Arrival Place", "5. Arrival Date", "6. Arrival Time",
-    "7. Mode", "8. Class", "9. Ticket Price/Rate (Rs.)",
-    "10. Actual Total Amount of Ticket (Rs.)", "11. KM", "12. Rate (Rs.)",
-    "13. Total (Rs.)", 
-    "14. Days of daily allowance receivable (Hrs)", 
-    "15. Daily allowance rate (Rs.)", 
-    "16. Amount of Allowance (Rs.)", 
-    "17. Total amount receivable (10+13+16) (Rs.)",
-    "18. Purpose of Journey"
-]
+da_rate_hotel = st.sidebar.number_input(
+    "Hotel/Special DA Rate (₹)", 
+    min_value=0, 
+    value=1000, 
+    help="Your eligible DA for Hotel stays or Tier-1 Cities."
+)
 
-# ==========================================
-# 🛠️ SECTION I: CALCULATE DA (Rate & Time)
-# ==========================================
-st.header("Section I: DA Rate Determination & Calculation")
-st.info("Upload your Salary Slip and Rules. The AI will determine your Rate, and the system will calculate DA days based on Statute S.119.")
+# --- 3. STATUTE S.119 LOGIC CONTEXT ---
+# We embed the rules directly so the AI knows how to calculate strict S.119 compliance
+S119_RULES_CONTEXT = """
+**STATUTE S.119 DA CALCULATION RULES:**
 
-col1, col2 = st.columns(2)
-with col1:
-    salary_slip = st.file_uploader("Upload Salary Slip", type=['pdf', 'png', 'jpg'], key="da_sal")
-with col2:
-    rules_doc = st.file_uploader("Upload Statute S.119 Rules", type=['pdf'], key="da_rules")
+1. **Absence Definition**: Absence from Headquarters is calculated from the time of departure to the time of return.
+2. **Day Definition**: A "Day" means a calendar day (00:00 to 24:00).
+3. **Rates based on Duration (Per Day):**
+   - Absence not exceeding 6 hours: **30%** of Daily Allowance.
+   - Absence exceeding 6 hours but not exceeding 12 hours: **50%** of Daily Allowance.
+   - Absence exceeding 12 hours: **100%** of Daily Allowance.
+4. **City Tiers (Tier-1/Special):**
+   - Cities like Ahmedabad, Surat, Vadodara, Rajkot, Bhavnagar, Jamnagar, Mumbai, Delhi, Chennai, Bangalore, Kolkata, Hyderabad, Pune, Jaipur, etc., are considered for Higher Rates/Hotel Rates if applicable.
+   - All other places: Ordinary Rate.
+"""
 
-if salary_slip and rules_doc:
-    if st.button("🚀 Calculate Daily Allowance"):
-        with st.spinner("Determining Pay Level and Calculating Admissible Days..."):
-            
-            # 1. GET DA RATE VIA AI (From Documents)
-            salary_blob = {"mime_type": salary_slip.type, "data": salary_slip.getvalue()}
-            rules_blob = {"mime_type": rules_doc.type, "data": rules_doc.getvalue()}
-            
-            rate_prompt = """
-            Review the Salary Slip to find the 'Pay Level'. 
-            Review the Statute S.119 Rules to find the 'Daily Allowance Rate' for that level.
-            Check for any reductions (Circuit House, etc.).
-            Return ONLY a JSON object: {"da_rate": 000}
-            """
-            
-            try:
-                response = model.generate_content([rate_prompt, salary_blob, rules_blob])
-                # Clean and parse JSON
-                clean_text = response.text.replace('```json', '').replace('```', '').strip()
-                da_rate = json.loads(clean_text).get('da_rate', 0)
-            except:
-                st.error("Could not automatically determine rate. Defaulting to 0.")
-                da_rate = 0
+# --- 4. CALCULATION ENGINE ---
+st.subheader("1. Generate Calculation")
 
-            # 2. PERFORM STATUTORY CALCULATION (Python Logic)
-            base_df = st.session_state['ta_rearranged_df'].copy()
-            
-            # Function: S.119 6/12/24 Hour Rule
-            def calculate_da_statute_s119(start_dt, end_dt):
-                duration = end_dt - start_dt
-                total_hrs = duration.total_seconds() / 3600
-                
-                # Rule: No DA for < 6 hours
-                if total_hrs < 6:
-                    return 0.0, total_hrs
-                
-                # Rule: Full blocks of 24 hours
-                full_days = int(total_hrs // 24)
-                remainder = total_hrs % 24
-                
-                # Rule: Regulate the remaining period
-                extra_day = 0.0
-                if 6 <= remainder < 12:
-                    extra_day = 0.5  # Half DA
-                elif remainder >= 12:
-                    extra_day = 1.0  # Full DA
-                
-                return (full_days + extra_day), total_hrs
-
-            # Apply calculation row-by-row
-            for idx, row in base_df.iterrows():
-                try:
-                    # Parse Dates
-                    d_date = pd.to_datetime(row["2. Departure Date"], dayfirst=True).date()
-                    d_time = pd.to_datetime(row["3. Departure Time"]).time()
-                    a_date = pd.to_datetime(row["5. Arrival Date"], dayfirst=True).date()
-                    a_time = pd.to_datetime(row["6. Arrival Time"]).time()
-                    
-                    dep_dt = datetime.combine(d_date, d_time)
-                    arr_dt = datetime.combine(a_date, a_time)
-                    
-                    # Calculate
-                    da_days, hrs = calculate_da_statute_s119(dep_dt, arr_dt)
-                    
-                    # Fill Dataframe
-                    base_df.at[idx, "14. Days of daily allowance receivable (Hrs)"] = f"{da_days} ({round(hrs, 1)} hrs)"
-                    base_df.at[idx, "15. Daily allowance rate (Rs.)"] = da_rate
-                    base_df.at[idx, "16. Amount of Allowance (Rs.)"] = da_days * da_rate
-                    
-                except Exception as e:
-                    # Handle empty rows or parsing errors gracefully
-                    continue
-
-            # 3. DISPLAY TABLE EXACTLY LIKE THE IMAGE
-            st.success(f"Calculation Complete. Applicable Rate: ₹{da_rate}")
-            st.subheader("Date-wise DA Breakdown")
-            
-            # Create a specific view matching the image columns
-            da_display_df = base_df[[
-                "2. Departure Date", 
-                "14. Days of daily allowance receivable (Hrs)", 
-                "15. Daily allowance rate (Rs.)", 
-                "16. Amount of Allowance (Rs.)"
-            ]].copy()
-            
-            # Rename columns to match the image exactly
-            da_display_df.columns = [
-                "Date", 
-                "Days of daily allowance receivable", 
-                "Daily allowance rate (Rs.)", 
-                "Amount of Allowance (Rs.)"
-            ]
-            
-            # Use st.table for the exact look requested
-            st.table(da_display_df)
-            
-            # Save to session for Section II
-            st.session_state['processed_da_df'] = base_df
-
-# ==========================================
-# 📄 SECTION II: MASTER TABLE & EXPORT
-# ==========================================
-st.divider()
-st.header("Section II: Final University TA/DA Master Table")
-
-if 'processed_da_df' in st.session_state:
-    master_df = st.session_state['processed_da_df'].copy()
-    
-    # Calculate Column 17: Sum (Col 10 + Col 13 + Col 16)
-    for idx, row in master_df.iterrows():
+col1, col2 = st.columns([1, 4])
+if col1.button("🤖 Calculate DA with AI"):
+    with st.spinner("Applying S.119 Rules to your Tour Diary..."):
         try:
-            c10 = float(pd.to_numeric(row.get("10. Actual Total Amount of Ticket (Rs.)", 0), errors='coerce') or 0)
-            c13 = float(pd.to_numeric(row.get("13. Total (Rs.)", 0), errors='coerce') or 0)
-            c16 = float(pd.to_numeric(row.get("16. Amount of Allowance (Rs.)", 0), errors='coerce') or 0)
+            # Prepare Data
+            diary_json = st.session_state['raw_diary_df'].to_json(orient='records', date_format='iso')
             
-            master_df.at[idx, "17. Total amount receivable (10+13+16) (Rs.)"] = c10 + c13 + c16
-        except:
-            master_df.at[idx, "17. Total amount receivable (10+13+16) (Rs.)"] = 0
+            # Construct Prompt
+            prompt = f"""
+            You are an accountant for an Agricultural University in Gujarat. 
+            Calculate the Daily Allowance (DA) for the following Tour Diary based strictly on Statute S.119.
 
-    # Ensure Column 18 exists
-    if "18. Purpose of Journey" not in master_df.columns:
-        master_df["18. Purpose of Journey"] = ""
+            **INPUT DATA (Tour Diary):**
+            {diary_json}
 
-    # Display Editable Master Table
-    st.write("Review the complete table below (Columns 1–18):")
-    final_table = st.data_editor(
-        master_df[COL_NAMES], 
-        use_container_width=True, 
-        height=500,
-        num_rows="dynamic"
+            **USER RATES:**
+            - Ordinary Rate (100%): ₹{da_rate_ordinary}
+            - Special/Hotel Rate (100%): ₹{da_rate_hotel}
+
+            **RULES (Statute S.119):**
+            {S119_RULES_CONTEXT}
+
+            **INSTRUCTIONS:**
+            1. Analyze the tour row by row. Determine the "Place of Halt" for each day.
+            2. If the place is a major city (Ahmedabad, Surat, Mumbai, Delhi, Bangalore, etc.), use the **Special Rate**. Otherwise, use **Ordinary Rate**.
+            3. Calculate the hours spent on tour for each specific date.
+            4. Apply the Percentage Rule (30% / 50% / 100%) based on hours.
+            5. Return a JSON array.
+
+            **REQUIRED JSON OUTPUT FORMAT:**
+            [
+              {{
+                "Date": "DD-MM-YYYY",
+                "Place": "Name of City/Place",
+                "Rate_Type": "Ordinary" or "Special",
+                "Applicable_Rate": {da_rate_ordinary} or {da_rate_hotel},
+                "Hours_Claimed": "Number of hours",
+                "Percentage": "30%" or "50%" or "100%",
+                "DA_Amount": "Calculated Amount"
+              }}
+            ]
+            """
+
+            # Call Gemini
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            
+            # Parse JSON
+            cleaned_text = response.text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(cleaned_text)
+            
+            # Create DataFrame
+            df_da = pd.DataFrame(data)
+            
+            # Save to Session
+            st.session_state['final_da_data'] = df_da
+            st.success("✅ Calculation Complete!")
+            
+        except Exception as e:
+            st.error(f"Error during calculation: {e}")
+
+# --- 5. EDIT & REVIEW ---
+if 'final_da_data' in st.session_state:
+    st.subheader("2. Review & Edit DA Claims")
+    st.markdown("You can modify the percentage or amounts manually if the AI miscategorized a city.")
+    
+    # Allow editing
+    edited_da_df = st.data_editor(
+        st.session_state['final_da_data'],
+        num_rows="dynamic",
+        use_container_width=True,
+        key="da_editor",
+        column_config={
+            "DA_Amount": st.column_config.NumberColumn("DA Amount (₹)", format="%.2f"),
+            "Applicable_Rate": st.column_config.NumberColumn("Rate Base (₹)", format="%.2f"),
+        }
     )
+    
+    # Update Session State
+    st.session_state['final_da_data'] = edited_da_df
+    
+    # Summary Metrics
+    total_da = pd.to_numeric(edited_da_df['DA_Amount'], errors='coerce').sum()
+    st.metric(label="Total Daily Allowance Claim", value=f"₹ {total_da:,.2f}")
 
-    # PAGE 5 EXPORT
-    st.subheader("📤 Export Data (Page 5)")
-    csv = final_table.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Final TA/DA Statement (CSV)",
-        data=csv,
-        file_name="University_TADA_Final_Page5.csv",
-        mime="text/csv",
-    )
-else:
-    st.info("Please perform the calculation in Section I first.")
+    st.markdown("---")
+    st.write("👉 **Next Step:** Go to '4_Export' to generate your document.")
