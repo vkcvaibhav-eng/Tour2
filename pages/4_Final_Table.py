@@ -84,7 +84,7 @@ def ai_smart_merge(ta_df, da_df, api_key):
     """
     
     # Using gemini-1.5-pro for high reasoning capability
-    model_name = "gemini-1.5-pro" 
+    model_name = "gemini-3-pro-preview" 
     
     try:
         model = genai.GenerativeModel(model_name)
@@ -258,3 +258,4 @@ if 'final_18_col_df' in st.session_state:
         file_name="Final_TA_DA_Claim.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
