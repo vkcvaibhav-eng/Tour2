@@ -13,19 +13,18 @@ st.set_page_config(layout="wide", page_title="Step 5: Final Gujarati Export")
 st.title("🇮🇳 Step 5: Final Gujarati Export (A2 Size)")
 st.markdown("---")
 
-# --- DATA CONNECTION (Connects to Step 4 Data) ---
-# We retrieve the data directly from the session state used in Step 4
-if 'final_ta_data' in st.session_state:
+# --- DATA CONNECTION (Fixed to match Step 4) ---
+# We prioritize 'final_18_col_df' (The merged result from Step 4)
+if 'final_18_col_df' in st.session_state:
+    df_ta = st.session_state['final_18_col_df']
+    st.success(f"✅ Connected to Step 4 Final Table: {len(df_ta)} rows loaded.")
+elif 'final_ta_data' in st.session_state:
+    # Fallback to Step 2 data if Step 4 wasn't run
     df_ta = st.session_state['final_ta_data']
-    st.success(f"✅ Connected to Final Table: {len(df_ta)} rows loaded.")
+    st.warning("⚠️ Using raw Step 2 data. (Tip: Run Step 4 for the fully merged table).")
 else:
-    st.warning("⚠️ No data found from Step 4. Please complete previous steps first.")
+    st.error("⚠️ No data found. Please complete Step 4 (Final Table) first.")
     df_ta = pd.DataFrame()
-
-if 'final_da_data' in st.session_state:
-    df_da = st.session_state['final_da_data']
-else:
-    df_da = pd.DataFrame()
 
 # --- HELPER FUNCTIONS FOR WORD ---
 
@@ -52,7 +51,7 @@ def format_cell_text(cell, text, font_size=9, bold=False, align=WD_ALIGN_PARAGRA
     run.font.name = 'Arial Unicode MS'  # Required for Gujarati
     cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-def create_gujarati_doc(ta_data, da_data):
+def create_gujarati_doc(ta_data):
     doc = Document()
     
     # 1. PAGE SETUP: A2 PORTRAIT (42cm x 59.4cm)
@@ -78,9 +77,6 @@ def create_gujarati_doc(ta_data, da_data):
     table.autofit = False 
     
     # Column Widths (Adjusted for A2 width ~39cm usable)
-    # 1-6 (Dates/Times) = 1.8cm
-    # 7-8 (Mode/Class) = 1.5cm
-    # 9-19 (Amounts) = Mixed
     widths = [
         1.8, 1.8, 1.5,   # 1,2,3 Depart
         1.8, 1.8, 1.5,   # 4,5,6 Arrive
@@ -91,7 +87,6 @@ def create_gujarati_doc(ta_data, da_data):
         1.5, 2.0, 2.5    # 17 Less, 18 DA Tot, 19 Total
     ]
     
-    # Apply widths
     for row in table.rows:
         for idx, width in enumerate(widths):
             if idx < 19:
@@ -99,12 +94,9 @@ def create_gujarati_doc(ta_data, da_data):
 
     # --- ROW 1: TOP HEADERS (Merged) ---
     r1 = table.rows[0].cells
-    
-    # Merge Logic
     r1[0].merge(r1[2])  # Depart
     r1[3].merge(r1[5])  # Arrive
     
-    # Set Text (Gujarati + English)
     format_cell_text(r1[0], "ઉપડ્યા (Departure)", bold=True, font_size=10)
     format_cell_text(r1[3], "પહોંચ્યા (Arrival)", bold=True, font_size=10)
     format_cell_text(r1[6], "મુસાફરીનો પ્રકાર\n(Mode)", bold=True)
@@ -139,74 +131,90 @@ def create_gujarati_doc(ta_data, da_data):
         format_cell_text(r3[i], str(i+1), bold=True)
 
     # --- ROW 4+: DATA FILLING ---
-    # We iterate through the TA Dataframe
-    
     total_claim = 0.0
 
     if not ta_data.empty:
+        # Standardize column names from Step 4
+        # We assume the columns come in order 0-18 (which matches 1-19 in output)
+        # 0:DepPlace, 1:DepDate, 2:DepTime, 3:ArrPlace, 4:ArrDate, 5:ArrTime, 6:Mode, 7:Class
+        # 8:TktPrice, 9:TktTotal(A), 10:KM, 11:Rate, 12:RoadTotal(B)
+        # 13:DADays, 14:DARate, 15:DAAmount(C), 16:Total(10+13+15), 17:Purpose
+        
+        # Note: Step 4 output has ~18 columns. We map them to our 19-column layout.
+        # Our 19-column layout: 1-16 matches. 
+        # Col 17 in output is "Less". Col 18 is "Net DA". Col 19 is "Total".
+        
+        # We access by integer location (iloc) to be safe against name changes
         for index, row in ta_data.iterrows():
             new_row = table.add_row().cells
             
-            # Helper for safe numeric conversion
-            def get_num(key):
+            # Safe fetch by index (iloc-like logic on row)
+            def get_val(idx):
+                if idx < len(row): return str(row.iloc[idx])
+                return ""
+            
+            def get_num(idx):
                 try:
-                    return float(row.get(key, 0))
+                    val = str(row.iloc[idx]).replace('₹','').replace(',','')
+                    return float(val)
                 except:
                     return 0.0
 
-            # 1-3 Departure
-            format_cell_text(new_row[0], row.get("1. Departure Place", ""))
-            format_cell_text(new_row[1], row.get("2. Departure Date", ""))
-            format_cell_text(new_row[2], row.get("3. Departure Time", ""))
+            # 1-3 Departure (Indices 0,1,2)
+            format_cell_text(new_row[0], get_val(0))
+            format_cell_text(new_row[1], get_val(1))
+            format_cell_text(new_row[2], get_val(2))
 
-            # 4-6 Arrival
-            format_cell_text(new_row[3], row.get("4. Arrival Place", ""))
-            format_cell_text(new_row[4], row.get("5. Arrival Date", ""))
-            format_cell_text(new_row[5], row.get("6. Arrival Time", ""))
+            # 4-6 Arrival (Indices 3,4,5)
+            format_cell_text(new_row[3], get_val(3))
+            format_cell_text(new_row[4], get_val(4))
+            format_cell_text(new_row[5], get_val(5))
 
-            # 7-8 Mode/Class
-            format_cell_text(new_row[6], row.get("7. Mode", ""))
-            format_cell_text(new_row[7], row.get("8. Class", ""))
+            # 7-8 Mode/Class (Indices 6,7)
+            format_cell_text(new_row[6], get_val(6))
+            format_cell_text(new_row[7], get_val(7))
 
-            # 9 Ticket No / Rate
-            format_cell_text(new_row[8], row.get("9. Ticket Price/Rate (Rs.)", ""))
+            # 9 Ticket Rate (Index 8)
+            format_cell_text(new_row[8], get_val(8))
 
-            # 10 Fare Amount (A)
-            fare_a = get_num("10. Actual Total Amount of Ticket (Rs.)")
+            # 10 Fare Amount (A) (Index 9)
+            fare_a = get_num(9)
             format_cell_text(new_row[9], f"{fare_a:.2f}")
 
-            # 11-13 Road Amount (B)
-            km = get_num("11. KM")
-            rate = get_num("12. Rate (Rs.) (Auto/Taxi/Pvt)")
-            
-            # Calculate Road Amt (B)
-            road_b = km * rate
-            if road_b == 0: road_b = get_num("13. Total (Rs.)") # Fallback
+            # 11-13 Road Amount (B) (Indices 10,11,12)
+            km = get_num(10)
+            rate = get_num(11)
+            road_b = get_num(12)
             
             format_cell_text(new_row[10], f"{km:.1f}" if km else "-")
             format_cell_text(new_row[11], f"{rate:.1f}" if rate else "-")
             format_cell_text(new_row[12], f"{road_b:.2f}")
 
-            # 14-18 DA Amount (C)
-            # Try to fetch DA data if it exists in the row, otherwise 0
-            # (Assuming standard names or matching if you merged previously)
-            da_days = get_num("DA_Days")
-            da_rate = get_num("DA_Rate")
-            da_c = get_num("DA_Amount") # Net DA
+            # 14-18 DA Amount (C) (Indices 13,14,15)
+            # Step 4 gives: 13:Days, 14:Rate, 15:DA_Amount
+            da_days = get_num(13)
+            da_rate = get_num(14)
+            da_amt = get_num(15) 
             
             format_cell_text(new_row[13], f"{da_days}" if da_days else "")
             format_cell_text(new_row[14], f"{da_rate}" if da_rate else "")
-            format_cell_text(new_row[15], f"{da_days*da_rate:.2f}" if da_days and da_rate else "") # Gross DA
-            format_cell_text(new_row[16], "") # Less
-            format_cell_text(new_row[17], f"{da_c:.2f}" if da_c else "")
+            
+            # Col 16 in Word is "Amount" (Gross). Col 17 is "Less". Col 18 is "Net DA".
+            # Usually Step 4 calculates Net DA directly into Col 15 (DA Amount).
+            # We will map DA Amount to Col 18 (Net DA) and put Gross in 16 if possible.
+            # If we don't have "Less", we assume Gross = Net.
+            
+            format_cell_text(new_row[15], f"{da_amt:.2f}" if da_amt else "") # Gross
+            format_cell_text(new_row[16], "") # Less (Placeholder)
+            format_cell_text(new_row[17], f"{da_amt:.2f}" if da_amt else "") # Net DA (C)
 
             # 19 Grand Total (A + B + C)
-            row_total = fare_a + road_b + da_c
+            # Recalculate to be safe: Fare(9) + Road(12) + DA(15)
+            row_total = fare_a + road_b + da_amt
             format_cell_text(new_row[18], f"{row_total:.2f}", bold=True)
 
             total_claim += row_total
             
-            # Visual padding
             for cell in new_row:
                 set_cell_margins(cell, top=50, bottom=50)
 
@@ -214,19 +222,17 @@ def create_gujarati_doc(ta_data, da_data):
     tot_row = table.add_row().cells
     tot_row[0].merge(tot_row[9]) # Merge first 10 cells
     format_cell_text(tot_row[0], "કુલ સરવાળો (Grand Total)", bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT)
-    
-    # Fill Total in Column 19
     format_cell_text(tot_row[18], f"₹ {total_claim:.2f}", bold=True)
 
     return doc
 
 # --- MAIN UI ---
-st.info("The table below matches the 1-19 column structure with Gujarati headers.")
+st.info("Generating Final Report from Step 4 Data.")
 
 if st.button("📄 Generate & Download Final A2 File"):
     if not df_ta.empty:
         try:
-            doc = create_gujarati_doc(df_ta, df_da)
+            doc = create_gujarati_doc(df_ta)
             
             buffer = BytesIO()
             doc.save(buffer)
@@ -241,5 +247,3 @@ if st.button("📄 Generate & Download Final A2 File"):
             st.balloons()
         except Exception as e:
             st.error(f"Error generating file: {e}")
-    else:
-        st.error("Data is empty. Please check Step 2.")
