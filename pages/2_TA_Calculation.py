@@ -65,7 +65,7 @@ def extract_data_from_documents(uploaded_files):
             image_parts = [{"mime_type": file.type, "data": image_data}]
             
             # Updated to gemini-1.5-pro for higher reasoning accuracy as requested
-            model = genai.GenerativeModel('gemini-1.5-pro') 
+            model = genai.GenerativeModel('ggemini-3-pro-preview') 
             
             prompt = "Analyze this Travel Ticket carefully. Return JSON list: [{\"date\": \"DD/MM/YYYY\", \"amount\": 500, \"km\": 0}]"
             response = model.generate_content([prompt, image_parts[0]])
@@ -81,7 +81,7 @@ def extract_data_from_documents(uploaded_files):
 
 def validate_against_rules(table_df, salary_file, rules_file):
     # Updated to gemini-1.5-pro for higher reasoning accuracy
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-3-pro-preview')
     table_json = table_df.to_json(orient="records")
     
     salary_part = {
@@ -312,3 +312,4 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
