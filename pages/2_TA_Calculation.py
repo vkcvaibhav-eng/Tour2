@@ -65,7 +65,7 @@ def extract_data_from_documents(uploaded_files):
             image_parts = [{"mime_type": file.type, "data": image_data}]
             
             # Use Gemini 1.5 Pro for high accuracy in reading Mode/Class from receipts
-            model = genai.GenerativeModel('gemini-1.5-pro') 
+            model = genai.GenerativeModel('gemini-3-pro-preview') 
             
             # UPGRADED PROMPT: Specifically asks for Mode and Class to map correctly
             prompt = """
@@ -91,7 +91,7 @@ def extract_data_from_documents(uploaded_files):
     return results
 
 def validate_against_rules(table_df, salary_file, rules_file):
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-3-pro-preview')
     table_json = table_df.to_json(orient="records")
     
     salary_part = { "mime_type": salary_file.type, "data": salary_file.getvalue() }
@@ -351,3 +351,4 @@ if st.button("⚖️ Run AI Audit"):
 if st.session_state.get('audit_passed'):
     if st.button("Proceed to DA Calculation ➡️"):
         st.switch_page("pages/3_DA_Calculation.py")
+
