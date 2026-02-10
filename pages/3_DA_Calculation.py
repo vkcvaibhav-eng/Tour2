@@ -81,7 +81,7 @@ if salary_slip and st.sidebar.button("🪄 Auto-detect Rates from Slip"):
             }}
             """
             
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3-flash-preview')
             response = model.generate_content([rate_prompt, *files_to_send])
             
             # Parse response
