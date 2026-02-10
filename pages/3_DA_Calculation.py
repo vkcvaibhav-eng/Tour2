@@ -83,7 +83,7 @@ if salary_slip and st.sidebar.button("🪄 Auto-detect Rates from Slip"):
             }}
             """
             
-            model = genai.GenerativeModel('gemini-1.5-flash') # Updated to stable model
+            model = genai.GenerativeModel('gemini-3-pro-preview') # Updated to stable model
             response = model.generate_content([rate_prompt, *files_to_send])
             
             # Parse response
@@ -136,7 +136,7 @@ if col1.button("🤖 Calculate DA with AI Audit"):
         """
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-pro-preview')
 
     # ----------------------------------------
     # PHASE 1: INITIAL CALCULATION
