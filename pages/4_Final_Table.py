@@ -77,14 +77,14 @@ def ai_smart_merge(ta_df, da_df, api_key):
     - **Intelligently assign** the DA values (Cols 14, 15, 16) to the relevant travel row (usually the row where the traveler arrives at the halt location for that date).
     - If a date has multiple journeys, usually the DA is added to the last arrival of that day or the main halt.
     - Ensure Col 17 is the mathematical sum of 10, 13, and 16.
-    - **CRITICAL:** Col 18 (Purpose of Journey) MUST be taken directly from the TA Data provided. Do not alter the text of the purpose.
+    - **CRITICAL:** Col 18 (Purpose of Journey) MUST be copied EXACTLY from the input TA Data. Do not summarize or change it.
     
     **OUTPUT FORMAT:**
     Return ONLY valid JSON: a list of objects where keys are the numbered column names (e.g., "1. Departure Place", "17. Total amount receivable...").
     """
     
-    # Using gemini-1.5-pro for high reasoning capability as requested
-    model_name = "gemini-3-pro-preview" 
+    # Using gemini-1.5-pro for high reasoning capability
+    model_name = "gemini-1.5-pro" 
     
     try:
         model = genai.GenerativeModel(model_name)
@@ -127,27 +127,46 @@ if col_center[1].button("🚀 Generate Final 1-18 Column Table (AI Merge)", type
         
         # --- PREPARE DATA ---
         ta_df = st.session_state['ta_rearranged_df'].copy()
-        
-        # --- ENFORCE PURPOSE FROM STEP 1 (TOUR DIARY) ---
-        # We explicitly grab the Purpose column from Step 1 if available to ensure accuracy.
-        if 'raw_diary_df' in st.session_state:
-            diary_df = st.session_state['raw_diary_df']
-            
-            # Identify the Purpose column in the original diary
-            # It might be named "Purpose" or "18. Purpose of Journey"
-            purpose_col_source = next((c for c in diary_df.columns if "Purpose" in str(c)), None)
-            
-            if purpose_col_source and len(diary_df) == len(ta_df):
-                # Force the column into the TA Data before AI processing
-                ta_df["18. Purpose of Journey"] = diary_df[purpose_col_source].values
-        
         da_df = st.session_state.get('final_da_data', None)
-        
+
+        # --- RETRIEVE PURPOSE FROM STEP 1 (TOUR DIARY) ---
+        # We try 'final_tour_diary' first (the confirmed one), then 'raw_diary_df'
+        diary_source = st.session_state.get('final_tour_diary', st.session_state.get('raw_diary_df'))
+        original_purpose_list = []
+
+        if diary_source is not None and not diary_source.empty:
+            # Find the Purpose column (could be "Purpose" or "18. Purpose...")
+            p_col = next((c for c in diary_source.columns if "Purpose" in str(c)), None)
+            
+            if p_col:
+                # If row counts match, we inject it into the TA DF so AI sees it
+                if len(diary_source) == len(ta_df):
+                    original_purpose_list = diary_source[p_col].tolist()
+                    ta_df["18. Purpose of Journey"] = original_purpose_list
+                else:
+                    st.warning(f"⚠️ Row count mismatch: Diary has {len(diary_source)} rows, TA has {len(ta_df)}. Purpose mapping might be imperfect.")
+
         # Call AI
         merged_data = ai_smart_merge(ta_df, da_df, api_key)
         
         if merged_data:
-            st.session_state['final_18_col_df'] = pd.DataFrame(merged_data)
+            df_final = pd.DataFrame(merged_data)
+            
+            # --- POST-PROCESS: HARD OVERWRITE PURPOSE ---
+            # If we successfully extracted the list earlier and lengths match, 
+            # we force overwrite the AI output to ensure 100% accuracy.
+            if original_purpose_list and len(df_final) == len(original_purpose_list):
+                # Ensure the column exists
+                if "18. Purpose of Journey" not in df_final.columns:
+                     # If AI named it differently, try to find it or create it
+                     df_final["18. Purpose of Journey"] = original_purpose_list
+                else:
+                     df_final["18. Purpose of Journey"] = original_purpose_list
+                
+                # Verify overwrite
+                # st.toast("✅ Purpose of Journey strictly synced from Step 1.")
+
+            st.session_state['final_18_col_df'] = df_final
             st.success("✅ Merging Complete!")
         else:
             st.error("Failed to generate table.")
@@ -172,23 +191,17 @@ if 'final_18_col_df' in st.session_state:
     df_final = st.session_state['final_18_col_df']
     
     # Ensure columns match mainly for the editor
-    # (AI might return slightly different keys, so we normalize if needed, 
-    # but usually the prompt handles it. We'll trust the editor to show what it got.)
-    
-    # Force Recalculation of Col 17 to ensure Math Accuracy (Python > AI for math)
-    # We strip currency symbols if present
-    def clean_money(val):
-        if isinstance(val, str):
-            val = val.replace('₹', '').replace(',', '').strip()
-        return pd.to_numeric(val, errors='coerce') if val else 0.0
-
     try:
-        # Map AI keys to standard keys if they slightly differ, strictly relying on index if names fail
-        # This is a robust fallback if AI names keys "Col 1", "Col 2" etc.
         if len(df_final.columns) == 18:
+            # We map columns by index to ensure naming consistency
             df_final.columns = final_cols
             
         # Math Safety Check
+        def clean_money(val):
+            if isinstance(val, str):
+                val = val.replace('₹', '').replace(',', '').strip()
+            return pd.to_numeric(val, errors='coerce') if val else 0.0
+
         c10 = df_final["10. Actual Total Amount of Ticket (Rs.)"].apply(clean_money).fillna(0)
         c13 = df_final["13. Total (Rs.)"].apply(clean_money).fillna(0)
         c16 = df_final["16. Amount of Allowance (Rs.)"].apply(clean_money).fillna(0)
@@ -208,8 +221,9 @@ if 'final_18_col_df' in st.session_state:
 
     # 4. Totals
     st.divider()
-    total_receivable = edited_final["17. Total amount receivable (10 + 13 + 16)"].sum()
-    st.metric("💰 GRAND TOTAL CLAIM", f"₹ {total_receivable:,.2f}")
+    if "17. Total amount receivable (10 + 13 + 16)" in edited_final.columns:
+        total_receivable = edited_final["17. Total amount receivable (10 + 13 + 16)"].sum()
+        st.metric("💰 GRAND TOTAL CLAIM", f"₹ {total_receivable:,.2f}")
 
     # 5. Export
     st.subheader("📥 Export")
@@ -224,20 +238,17 @@ if 'final_18_col_df' in st.session_state:
         key='download-csv'
     )
 
-   # Simple Excel Download (Using openpyxl, which is already installed)
+   # Excel Download
     buffer = io.BytesIO()
-    # CHANGE: Use 'openpyxl' instead of 'xlsxwriter'
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         edited_final.to_excel(writer, sheet_name='Claim Sheet', index=False)
         
-        # Auto-adjust columns width (adjusted for openpyxl)
         worksheet = writer.sheets['Claim Sheet']
         for idx, col in enumerate(edited_final.columns):
             max_len = max(
                 edited_final[col].astype(str).map(len).max(),
                 len(str(col))
             ) + 2
-            # openpyxl uses letters for columns (A, B, C...)
             col_letter = chr(65 + idx) if idx < 26 else 'A' + chr(65 + (idx - 26)) 
             worksheet.column_dimensions[col_letter].width = max_len
             
@@ -247,5 +258,3 @@ if 'final_18_col_df' in st.session_state:
         file_name="Final_TA_DA_Claim.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-
