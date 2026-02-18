@@ -70,28 +70,13 @@ def num_to_gujarati_words(num):
     return " ".join(parts).strip()
 
 # --- DOCX FORMATTING HELPERS ---
-def set_cell_margins(cell, top=0, bottom=0, left=50, right=50):
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    tcMar = OxmlElement('w:tcMar')
-    for m in ['top', 'bottom', 'left', 'right']:
-        node = OxmlElement(f'w:{m}')
-        node.set(qn('w:w'), str(eval(m)))
-        node.set(qn('w:type'), 'dxa')
-        tcMar.append(node)
-    tcPr.append(tcMar)
-
 def format_cell(cell, text, font_size=10, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER):
-    # Ensure paragraph exists
     if not cell.paragraphs:
         cell.add_paragraph()
     p = cell.paragraphs[0]
     p.alignment = align
-    
-    # Clear existing runs
     for run in p.runs:
         run._element.getparent().remove(run._element)
-        
     run = p.add_run(str(text))
     run.font.name = 'Arial Unicode MS'
     run.font.size = Pt(font_size)
@@ -106,80 +91,145 @@ def set_row_height(row, height_cm):
 def create_split_layout_doc(ta_data):
     doc = Document()
     
+    # 1. PRE-CALCULATE TOTALS (Required for Page 1 & 4)
+    total_claim = pd.to_numeric(ta_data.iloc[:, 16].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').sum()
+    total_words = num_to_gujarati_words(int(total_claim))
+    
     # GLOBAL STYLES
     style = doc.styles['Normal']
     style.font.name = 'Arial Unicode MS'
-    style.font.size = Pt(10)
+    style.font.size = Pt(11)
 
-    # PAGE SETUP (A4 Portrait default)
+    # ================= PAGE 1: HISABI PATRAK =================
+    # Use existing first section instead of adding new one
     section = doc.sections[0]
     section.page_width = Mm(210)
     section.page_height = Mm(297)
-    section.left_margin = Mm(15)
+    section.left_margin = Mm(20)
     section.right_margin = Mm(15)
     section.top_margin = Mm(15)
     section.bottom_margin = Mm(15)
 
-    # ================= PAGE 1: HEADER & TITLE =================
+    # Top Right: Hisabi Patrak
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run = p.add_run("હિસાબી પત્રક નંબર ____________")
     
-    # 1. Main Title
-    p_title = doc.add_paragraph("નવસારી કૃષિ વિશ્વવિધાલય")
-    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_title.runs[0].font.size = Pt(16)
-    p_title.runs[0].font.bold = True
+    # Center Header
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("નવસારી કૃષિ વિશ્વવિધાલય\n")
+    run.bold = True
+    run.font.size = Pt(16)
+    run = p.add_run("મુસાફરી ભથ્થા બીલ")
+    run.bold = True
+    run.font.size = Pt(14)
+
+    # Info Table (Bill No vs Voucher No)
+    table = doc.add_table(rows=1, cols=2)
+    table.width = Mm(175)
+    table.autofit = False
     
-    p_sub = doc.add_paragraph("મુસાફરી ભથ્થા બીલ")
-    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_sub.runs[0].font.size = Pt(14)
-    p_sub.runs[0].font.bold = True
-    p_sub.runs[0].underline = True
+    # Left Column
+    cell_l = table.cell(0, 0)
+    cell_l.width = Mm(80)
+    p = cell_l.paragraphs[0]
+    p.add_run("બીલ નંબર :\nતારીખ        :")
+    p.runs[0].bold = True
+
+    # Right Column
+    cell_r = table.cell(0, 1)
+    cell_r.width = Mm(95)
+    p = cell_r.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.add_run("વાઉચર નં. ____________________\n")
+    p.add_run("તારીખ ____________________\n")
+    p.add_run("યુનિટ નંબર : __________________\n")
+    p.add_run("કોડ નંબર : ____________________")
 
     doc.add_paragraph() # Spacer
 
-    # 2. Header Details Table (Exact formatting requested)
-    # 4 Rows, 2 Columns (Left aligned keys, Right aligned values mostly)
-    hdr_table = doc.add_table(rows=4, cols=2)
-    hdr_table.autofit = False
-    hdr_table.columns[0].width = Mm(100)
-    hdr_table.columns[1].width = Mm(80)
+    # Main Body Text
+    p = doc.add_paragraph(f"આચાર્ય અને ડીનશ્રી, નં. મ. કૃષિ મહાવિદ્યાલય, નકૃયું, નવસારી ની કચેરીનું માહે: {voucher_month} નું")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.runs[0].bold = True
 
-    # Row 1
-    r0 = hdr_table.rows[0].cells
-    format_cell(r0[0], f"કાર્ય મથક : {work_place}", align=WD_ALIGN_PARAGRAPH.LEFT, bold=True)
-    format_cell(r0[1], f"કર્મચારીનુ નામ: {emp_name}", align=WD_ALIGN_PARAGRAPH.RIGHT, bold=True)
-    
-    # Row 2
-    r1 = hdr_table.rows[1].cells
-    format_cell(r1[0], f"કચેરી : {office_name}", align=WD_ALIGN_PARAGRAPH.LEFT, bold=True)
-    format_cell(r1[1], " ", align=WD_ALIGN_PARAGRAPH.RIGHT) # Empty spacer
-    
-    # Row 3
-    r2 = hdr_table.rows[2].cells
-    format_cell(r2[0], " ", align=WD_ALIGN_PARAGRAPH.LEFT) # Empty spacer
-    format_cell(r2[1], f"હોદ્દો: {designation}", align=WD_ALIGN_PARAGRAPH.RIGHT, bold=True)
-    
-    # Row 4
-    r3 = hdr_table.rows[3].cells
-    format_cell(r3[0], f"મૂળ પગાર: {basic_pay}", align=WD_ALIGN_PARAGRAPH.LEFT)
-    format_cell(r3[1], f"Level: {pay_level} | Pay scale: {pay_scale}", align=WD_ALIGN_PARAGRAPH.RIGHT)
+    p = doc.add_paragraph("મુસાફરી ભથ્થા બિલ")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.runs[0].bold = True
+    p.runs[0].underline = True
+    p.runs[0].font.size = Pt(14)
 
-    # Remove borders for header table to look like text
-    for row in hdr_table.rows:
-        for cell in row.cells:
-            tcPr = cell._tc.get_or_add_tcPr()
-            tcBorders = OxmlElement('w:tcBorders')
-            for border in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
-                node = OxmlElement(f'w:{border}')
-                node.set(qn('w:val'), 'nil')
-                tcBorders.append(node)
-            tcPr.append(tcBorders)
+    p = doc.add_paragraph("યુનિટ/સબયુનિટ : આચાર્ય અને ડીનશ્રી, ન. મ. કૃષિ મહાવિદ્યાલય, નકૃયું, નવસારી")
+    p = doc.add_paragraph("ખર્ચ માટેનું બજેટ સદર :- ____________________")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph("યોજનાનું નામ :- ____________________")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    doc.add_paragraph() # Spacer
+
+    # Claim Amount
+    p = doc.add_paragraph()
+    p.add_run("આથી રૂ।. ")
+    r = p.add_run(f" {total_claim:.0f} ")
+    r.bold = True
+    r.underline = True
+    p.add_run(" નો દાવો મંજુર કરી ગ્રાહય રાખવામાં આવે છે.")
+
+    # Boxed Amount Area (Simulated with borders)
+    tbl_amt = doc.add_table(rows=1, cols=1)
+    tbl_amt.style = 'Table Grid'
+    cell = tbl_amt.cell(0,0)
+    p = cell.paragraphs[0]
+    p.add_run("આ બીલમાં જણાવેલ રૂા  ")
+    p.add_run(f"{total_claim:.0f}").bold = True
+    p.add_run("  ( અંકે રૂપિયા ")
+    p.add_run(f"{total_words} પુરા").bold = True
+    p.add_run(" પૈસા )\n\n")
+    p.add_run("મંજુર કરવામાં આવે છે. અને તે રોકડા / ચેક નં. ______________ તા. ___________ થી ચુકવવામાં આવે છે.")
+
+    doc.add_paragraph() # Spacer
+
+    # Signatures
+    sig_table = doc.add_table(rows=1, cols=2)
+    sig_table.width = Mm(175)
+    
+    l_cell = sig_table.cell(0, 0)
+    l_cell.text = "સ્થળ :    નવસારી\nતારીખ :"
+    
+    r_cell = sig_table.cell(0, 1)
+    p = r_cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run("____________________\n")
+    p.add_run("બીલ મંજુર કરનાર અધિકારીની\nસહી અને હોદ્દો")
+
+    doc.add_paragraph() # Spacer
+
+    # Budget Table
+    b_table = doc.add_table(rows=4, cols=3)
+    b_table.style = 'Table Grid'
+    hdr_cells = b_table.rows[0].cells
+    hdr_cells[0].text = ""
+    hdr_cells[1].text = "રૂ."
+    hdr_cells[2].text = "પૈસા"
+    
+    b_table.cell(1, 0).text = "(૧) સને ૨૦૨૪-૨૫ માટે બજેટમાં મંજુર થયેલ રકમ"
+    b_table.cell(2, 0).text = "(૨) આ બીલ સાથે થયેલ કુલ ખર્ચ"
+    b_table.cell(3, 0).text = "(૩) ખર્ચ માટે બાકી રહેતી રકમ"
+
+    doc.add_paragraph() # Spacer
+
+    # Bottom Signature
+    p = doc.add_paragraph()
+    p.add_run(f"રૂા ( {total_claim:.0f} ) અંકે રૂપિયા : {total_words} પુરા મંજુર કર્યા")
+    
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.add_run("નિયંત્રણ અધિકારીની સહી___________").bold = True
 
     doc.add_page_break()
 
     # ================= PAGE 2: TABLE PART 1 (Cols 1-10) =================
-    
-    # Page 2 Section Setup
-    # Note: We keep Portrait, but maybe reduce margins slightly for table width
     
     p = doc.add_paragraph("મુસાફરી વિગત (ભાગ-૧)")
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -350,89 +400,238 @@ def create_split_layout_doc(ta_data):
     
     p = doc.add_paragraph("નોંધ :-")
     p.runs[0].bold = True
-    p.runs[0].font.size = Pt(11)
     
-    # Numbered List
     notes = [
         "કોલમ નં. ૭ માં મુસાફરી પ્રકાર રેલ્વે/એસ.ટી./હવાઈ/સ્ટીમર/ભાડાનું યુનિવર્સિટી કે સરકારી કે પોતાનું વાહન ઈત્યાદી મારફત કરેલ મુસાફરીની સ્પષ્ટ નોંધ આપવી.",
         "કોલમ નં. ૧૧ થી ૧૩ માઈલેજ મેળવતા અધિકારીઓ કે સભ્યોએ ભરવી.",
         "કોલમ નં. ૧૬ માં માત્ર દૈનિક ભથ્થાની રકમ લેવી જેથી કોલમ (૧૪ X ૧૫= ૧૬) થઈ રહેવું જોઈએ.",
         "જયારે મુસાફરી ભથ્થા બીલમાં શરૂઆતમાં મુસાફરીને બદલે 'હોલ્ટ' દર્શાવવામાં આવેલ હોય તેવા કિસ્સામાં 'હોલ્ટ' ની શરૂઆત થયાની તારીખ કો.નં. ૧૯ માં દર્શાવવી."
     ]
-    
-    for i, note in enumerate(notes, 1):
-        p = doc.add_paragraph(f"{i}. {note}")
-        p.paragraph_format.left_indent = Cm(1.0)
-        p.paragraph_format.first_line_indent = Cm(-0.6)
-
-    doc.add_paragraph() # Spacer
-    
-    # Certificate Title
-    p = doc.add_paragraph("યુનિવર્સિટી કર્મચારીએ આપવાનું પ્રમાણપત્ર")
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.runs[0].bold = True
-    p.runs[0].underline = True
-
-    certs = [
-        "આથી પ્રમાણપત્ર આપવામાં આવે છે કે, આ બીલમાં આકારેલ રકમ બીજા કોઈ બીલમાં આકારેલ નથી.",
-        "આથી પ્રમાણીત કરવામાં આવે છે કે સદર મુસાફરી ભથ્થા બીલમાં દર્શાવેલ હકીકત સાચી છે.",
-        "આથી પ્રમાણપત્ર આપવામાં આવે છે કે બીલમાં દર્શાવેલ પ્રવાસ માટે મેં આ અગાઉ પેશગી લીધેલ નથી.",
-        "આ બીલમાં જણાવેલ યુનિવર્સિટી સિવાયની અન્ય સંસ્થાની કામગીરીના પ્રવાસ માટે જે તે સંસ્થા તરફથી પ્રવાસ ભથ્થના નાણાં મને મળેલ નથી."
-    ]
-    
-    for i, cert in enumerate(certs, 1):
-        p = doc.add_paragraph(f"{i}. {cert}")
-        p.paragraph_format.left_indent = Cm(1.0)
-        p.paragraph_format.first_line_indent = Cm(-0.6)
+    for note in notes:
+        doc.add_paragraph(note, style='List Number')
 
     doc.add_paragraph()
-    
-    # Signatures
-    sig_table = doc.add_table(rows=1, cols=2)
-    sig_table.width = Mm(180)
-    
-    # Left: Place/Date
-    l = sig_table.cell(0, 0)
-    l.text = "સ્થળ : નવસારી\nતારીખ :"
-    
-    # Right: Name
-    r = sig_table.cell(0, 1)
-    p = r.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.add_run(f"({emp_name})\n").bold = True
-    p.add_run(f"{designation}\nકર્મચારીની સહી")
-
-    doc.add_paragraph("_" * 70)
-
-    # Approval Section
-    p = doc.add_paragraph("મંજૂરી આદેશ")
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph("યુનિવર્સિટી કર્મચારીએ આપવાનું પ્રમાણપત્ર")
     p.runs[0].bold = True
     
-    total_words = num_to_gujarati_words(int(grand_sum))
-    
-    p = doc.add_paragraph()
-    p.add_run("સદરહુ મુસાફરી ભથ્થા બીલની કુલ રકમ રૂ. ")
-    p.add_run(f"{grand_sum:.0f}").bold = True
-    p.add_run(f" (અંકે રૂપિયા {total_words} પુરા) મંજુર કરવામાં આવે છે.")
+    certs = [
+        "આથી પ્રમાણપત્ર આપવામાં આવે છે કે, આ બીલમાં આકારેલ રકમ બીજા કોઈ બીલમાં આકારેલ નથી.",
+        "આથી પ્રમાણીત કરવામાં આવે છે કે સદર મુસાફરી ભથ્થ બીલમાં દર્શાવેલ હકીકત સાચી છે અને સદર મુસાફરી ભથ્થા બીલમાં કરવામાં આવેલ દાવો વખતો વખત સુધારવામાં આવેલ ગુજરાત કૃષિ વિશ્વવિધાલય મુસાફરી ભથ્થા નિયમોના ૬૫-૧ ના અનુમાનોને આધારે સાચો છે.",
+        "આથી પ્રમાણપત્ર આપવામાં આવે છે કે બીલમાં દર્શાવેલ પ્રવાસ માટે મેં આ અગાઉ પેશગી લીધેલ નથી. / મે પેશગી લીધેલ છે જેની વિગત નીચે દર્શાવેલ છે.  (લાગુ ન પડતી બાબત છેકી નાખવી અને તે બદલ સહી કરવી.)",
+        "આ બીલમાં જણાવેલ યુનિવર્સિટી સિવાયની અન્ય સંસ્થાની કામગીરીના પ્રવાસ માટે જે તે સંસ્થા તરફથી પ્રવાસ ભથ્થના નાણાં મને મળેલ નથી અને જે તે સંસ્થા તરફથી નાણાં મળશે તો તે રકમ થુનિવર્સિટી ફંડમાં જમા કરાવવામાં આવશે.",
+        "આથી પ્રમાણપત્ર આપવામાં આવે છે કે, પ્રવાસ ડાયરીમાં દર્શાવવામાં આવેલ સ્થળ, તારીખ, સમય, કિલોમીટર કચેરીના વાહન લોગબુક મુજબ આકારવામાં આવેલ છે."
+    ]
+    for cert in certs:
+        doc.add_paragraph(cert, style='List Number')
 
-    # Final Sig
+    # Employee Signature
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.add_run("\n\n_______________________\n")
-    p.add_run("ઉપાડ અને વહેંચણી અધિકારી\n").bold = True
-    p.add_run("(સહી અને સિક્કો)")
+    p.add_run(f"({emp_name})\n").bold = True
+    p.add_run(f"{designation}\nકર્મચારીની સહી નામ અને હોદ્દો")
+
+    doc.add_paragraph("_" * 50) # Horizontal Line simulation
+
+    # Officer Cert
+    p = doc.add_paragraph("યુનિવર્સિટી અધિકારીઓ અને અન્ય સભ્યોએ આપવાનું પ્રમાણપત્ર")
+    p.runs[0].bold = True
+    doc.add_paragraph("આથી પ્રમાણિત કરવામાં આવે છે કે સદર બીલમાં કરેલ મુસાફરી ભથ્થાનો દાવો આ અંગેના નિયમોની જોગવાઈઓના આધારે ખરો અને યોગ્ય છે.")
+
+    # Officer Signature
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.add_run("_______________________\n")
+    p.add_run("પ્રાધ્યાપક અને વડા\nકિટકશાત્ર વિભાગ\nનં. મ. કૃષિ મહાવિદ્યાલય\nનકૃયું, નવસારી").bold = True
+
+    doc.add_paragraph()
+
+    # --- FINAL SPLIT TABLE (CALCULATION & RECEIPT) ---
+    p = doc.add_paragraph("કર્મચારી / અધિકારી / સભ્યશ્રીએ નીચેની વિગત ભરવી.")
+    p.runs[0].bold = True
+
+    final_table = doc.add_table(rows=1, cols=2)
+    final_table.style = 'Table Grid'
+    final_table.allow_autofit = False
+    
+    # Left Cell (Calculation)
+    c1 = final_table.cell(0, 0)
+    c1.width = Mm(90)
+    p = c1.paragraphs[0]
+    p.add_run(f"બીલની કુલ રકમ\t= {total_claim:.0f}\n")
+    p.add_run("બાદ બીલની પેશગીની રકમ\t=\n")
+    p.add_run(f"ચૂકવવા પાત્ર ચોખ્ખી રકમ\t= {total_claim:.0f}\n\n")
+    p.add_run("પેશગીના નાણાં મળ્યાની તા.\n")
+    p.add_run("પેશગી કયા ઝોન /યુનિટમાંથી\t નીલ\nઉપાડવામાં આવી.\n\n")
+    p.add_run("પેશગી ઉપાડવાના વાઉચર નંબર ______ તારીખ _____")
+
+    # Right Cell (Receipt)
+    c2 = final_table.cell(0, 1)
+    c2.width = Mm(90)
+    p = c2.paragraphs[0]
+    p.add_run(f"બીલની રકમ રૂ. {total_claim:.0f}\n").bold = True
+    p.add_run(f"અંકે રૂપિયા {total_words} પુરા\n").bold = True
+    p.add_run("મને મળ્યા છે.\n\n")
+    p.add_run("સ્થળ : નવસારી\n")
+    p.add_run("તારીખ :\n\n\n")
+    p.add_run(f"                                ({emp_name})\n").bold = True
+    p.add_run(f"                                {designation}")
 
     return doc
 
 # --- UI PREVIEW ---
+
+# Calculate totals for preview
+total_claim_val = 0.0
+total_words_str = "શૂન્ય"
+if not df_ta.empty:
+    total_claim_val = pd.to_numeric(df_ta.iloc[:, 16], errors='coerce').sum()
+    total_words_str = num_to_gujarati_words(int(total_claim_val))
+
+# HTML PREVIEW OF THE NEW LAYOUT
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Gujarati:wght@400;600;700&display=swap');
+    .a4-page {
+        background-color: white; color: black; width: 210mm; min-height: 297mm;
+        padding: 15mm 20mm; margin: 10px auto;
+        font-family: 'Noto Sans Gujarati', sans-serif; font-size: 13px; line-height: 1.5;
+        box-shadow: 0 0 15px rgba(0,0,0,0.5);
+    }
+    .input-line { border-bottom: 1px solid black; display: inline-block; padding: 0 5px; }
+    table.budget-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+    table.budget-table th, table.budget-table td { border: 1px solid black; padding: 8px; vertical-align: middle; }
+    table.budget-table th { text-align: center; font-weight: bold; }
+    table.budget-table td { height: 35px; }
+    .flex-row { display: flex; justify-content: space-between; align-items: flex-end; }
+    .center { text-align: center; }
+    .right { text-align: right; }
+</style>
+""", unsafe_allow_html=True)
+
+page2_preview = f"""
+<div class="a4-page">
+    <div class="right" style="margin-bottom: 10px; font-size: 12px;">
+    હિસાબી પત્રક નંબર <span class="input-line" style="width:100px;"></span>
+    </div>
+    <div class="center">
+    <div style="font-size: 22px; font-weight: 700;">નવસારી કૃષિ વિશ્વવિધાલય</div>
+    <div style="font-size: 16px; font-weight: 700; margin-top: 5px;">મુસાફરી ભથ્થા બીલ</div>
+    </div>
+    <div class="flex-row" style="margin-top: 20px;">
+    <div style="width: 40%; font-weight: 700; font-size: 14px;">
+    <div style="margin-bottom: 10px;">બીલ નંબર :</div>
+    <div>તારીખ &nbsp;&nbsp;&nbsp;:</div>
+    </div>
+    <div style="width: 50%; text-align: right; font-size: 12px;">
+    <div style="margin-bottom: 5px;">વાઉચર નં. <span class="input-line" style="width:180px;"></span></div>
+    <div style="margin-bottom: 5px;">તારીખ <span class="input-line" style="width:180px;"></span></div>
+    <div style="margin-bottom: 5px;">યુનિટ નંબર : <span class="input-line" style="width:165px;"></span></div>
+    <div>કોડ નંબર : <span class="input-line" style="width:180px;"></span></div>
+    </div>
+    </div>
+    <div class="center" style="margin-top: 20px; font-weight: 700; font-size: 12px;">
+    આચાર્ય અને ડીનશ્રી, નં. મ. કૃષિ મહાવિદ્યાલય, નકૃયું, નવસારી ની કચેરીનું માહે: {voucher_month} નું
+    </div>
+    <div class="center" style="margin-top: 5px;">
+    <span style="font-size: 16px; font-weight: 700; border-bottom: 2px solid black; padding-bottom: 2px;">મુસાફરી ભથ્થા બિલ</span>
+    </div>
+    <div style="margin-top: 20px; font-weight: 600; font-size: 12px;">
+    યુનિટ/સબયુનિટ : આચાર્ય અને ડીનશ્રી, ન. મ. કૃષિ મહાવિદ્યાલય, નકૃયું, નવસારી
+    </div>
+    <div class="center" style="margin-top: 15px; font-weight: 600;">
+    ખર્ચ માટેનું બજેટ સદર :-
+    </div>
+    <div class="center" style="margin-top: 5px; font-weight: 600;">
+    યોજનાનું નામ :-
+    </div>
+    <div style="margin-top: 15px; font-size: 14px;">
+    આથી રૂા. <span class="input-line" style="width: 150px; text-align:center; font-weight:bold;">{total_claim_val:.0f}</span> ના દાવો મંજુર કરી ગ્રાહય રાખવામાં આવે છે.
+    </div>
+    <div style="margin-top: 10px; border-top: 1px solid black; padding-top: 10px;">
+    <div style="line-height: 2;">
+    આ બીલમાં જણાવેલ રૂા <span class="input-line" style="width: 80px; text-align:center; font-weight:bold;">{total_claim_val:.0f}</span> (
+    <span style="margin-left: 20px;">અંકે રૂપિયા <span style="font-weight:bold; font-size:14px;">{total_words_str} પુરા</span></span>
+    <span style="float:right;">પૈસા)</span>
+    <br>
+    મંજુર કરવામાં આવે છે. અને તે રોકડા / ચેક નં. <span class="input-line" style="width: 150px;"></span> તા. <span class="input-line" style="width: 100px;"></span> થી ચુકવવામાં આવે છે.
+    </div>
+    </div>
+    <hr style="border-top: 2px solid black; margin: 15px 0;">
+    <table class="budget-table">
+    <colgroup><col style="width: 70%;"><col style="width: 15%;"><col style="width: 15%;"></colgroup>
+    <thead>
+    <tr><th rowspan="2" style="text-align:left; border-bottom: none;"></th><th>રૂ.</th><th>પૈસા</th></tr>
+    <tr><th style="height:20px;"></th><th style="height:20px;"></th></tr>
+    </thead>
+    <tbody>
+    <tr><td>(૧) સને ૨૦૨૪-૨૫ માટે બજેટમાં મંજુર થયેલ રકમ</td><td></td><td></td></tr>
+    <tr><td>(૨) આ બીલ સાથે થયેલ કુલ ખર્ચ</td><td></td><td></td></tr>
+    <tr><td>(૩) ખર્ચ માટે બાકી રહેતી રકમ</td><td></td><td></td></tr>
+    </tbody>
+    </table>
+</div>
+"""
+
+page3_preview = f"""
+<div class="a4-page">
+    <div style="font-size: 11px;">
+    <strong>નોંધ :-</strong>
+    <ol style="margin-top: 5px; padding-left: 20px; margin-bottom: 10px;">
+    <li>કોલમ નં. ૭ માં મુસાફરી પ્રકાર રેલ્વે/એસ.ટી./હવાઈ/સ્ટીમર/ભાડાનું યુનિવર્સિટી કે સરકારી કે પોતાનું વાહન ઈત્યાદી મારફત કરેલ મુસાફરીની સ્પષ્ટ નોંધ આપવી.</li>
+    <li>કોલમ નં. ૧૧ થી ૧૩ માઈલેજ મેળવતા અધિકારીઓ કે સભ્યોએ ભરવી.</li>
+    </ol>
+    </div>
+    <div style="margin-top: 10px;">
+    <strong>યુનિવર્સિટી કર્મચારીએ આપવાનું પ્રમાણપત્ર</strong>
+    <ol style="margin-top: 5px; padding-left: 20px;">
+    <li>આથી પ્રમાણપત્ર આપવામાં આવે છે કે, આ બીલમાં આકારેલ રકમ બીજા કોઈ બીલમાં આકારેલ નથી.</li>
+    <li>આથી પ્રમાણીત કરવામાં આવે છે કે સદર મુસાફરી ભથ્થા બીલમાં દર્શાવેલ હકીકત સાચી છે...</li>
+    <li>આથી પ્રમાણપત્ર આપવામાં આવે છે કે બીલમાં દર્શાવેલ પ્રવાસ માટે મેં આ અગાઉ પેશગી લીધેલ નથી...</li>
+    </ol>
+    </div>
+    <div class="flex-row" style="margin-top: 20px;">
+    <div></div>
+    <div style="text-align: center;">
+    <strong>({emp_name})</strong><br>
+    {designation}<br>
+    કર્મચારીની સહી નામ અને હોદ્દો
+    </div>
+    </div>
+    <div style="margin-top: 20px; font-weight: 700; font-size: 13px; border-bottom: 2px solid black; padding-bottom: 2px;">
+    કર્મચારી / અધિકારી / સભ્યશ્રીએ નીચેની વિગત ભરવી.
+    </div>
+    <div style="display: flex; border-bottom: 2px solid black;">
+    <div style="width: 50%; border-right: 2px solid black; padding: 10px 10px 10px 0; font-weight: 600;">
+    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+    <span>બીલની કુલ રકમ</span><span style="font-weight: 700; font-size: 14px;">= &nbsp;&nbsp; {total_claim_val:.0f}</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+    <span>ચૂકવવા પાત્ર ચોખ્ખી રકમ</span><span style="font-weight: 700; font-size: 14px;">= &nbsp;&nbsp; {total_claim_val:.0f}</span>
+    </div>
+    </div>
+    <div style="width: 50%; padding: 10px 0 10px 10px; position: relative; font-weight: 600;">
+    <div style="margin-bottom: 5px;">બીલની રકમ રૂ. <span style="font-weight: 700; border-bottom: 1px solid black; font-size: 14px;">{total_claim_val:.0f}</span></div>
+    <div style="margin-bottom: 15px;">અંકે રૂપિયા <span style="font-weight: 700; border-bottom: 1px solid black; font-size: 14px;">{total_words_str} પુરા</span></div>
+    <div style="margin-bottom: 20px;">મને મળ્યા છે.</div>
+    <div style="text-align: center; position: absolute; bottom: 10px; right: 10px;">
+    <div style="font-weight: 700;">({emp_name})</div>
+    </div>
+    </div>
+    </div>
+</div>
+"""
+
+# --- UI PREVIEW RENDER ---
 st.markdown("### 📄 Layout Preview")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.info("Page 1: Header Info")
-col2.info("Page 2: Table (1-10)")
-col3.info("Page 3: Table (11-19)")
-col4.info("Page 4: Notes & Sig")
+col1, col2 = st.columns(2)
+with col1:
+    st.info("Page 1 (Hisabi Patrak)")
+    st.markdown(page2_preview, unsafe_allow_html=True)
+
+with col2:
+    st.info("Page 4 (Notes & Receipt)")
+    st.markdown(page3_preview, unsafe_allow_html=True)
 
 # Button
 if st.button("📄 Generate & Download Final Word File", type="primary"):
