@@ -231,9 +231,20 @@ def create_split_layout_doc(ta_data):
 
     # ================= PAGE 2: TABLE PART 1 (Cols 1-10) =================
     
-    p = doc.add_paragraph("મુસાફરી વિગત (ભાગ-૧)")
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.runs[0].bold = True
+    # NEW HEADER FOR PAGE 2 (LEFT SIDE)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    
+    run = p.add_run(f"કાર્ય મથક : {work_place}\n")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+    
+    run = p.add_run(f"કચેરી : {office_name}\n")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+    
+    run = p.add_run(f"કર્મચારીનુ નામ: {emp_name}")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+
+    doc.add_paragraph() # Spacer before table
 
     # Columns: 1.DepPlace, 2.Date, 3.Time, 4.ArrPlace, 5.Date, 6.Time, 7.Mode, 8.Class, 9.Price, 10.Total
     table_left = doc.add_table(rows=3, cols=10)
@@ -310,9 +321,20 @@ def create_split_layout_doc(ta_data):
 
     # ================= PAGE 3: TABLE PART 2 (Cols 11-19) =================
     
-    p = doc.add_paragraph("મુસાફરી વિગત (ભાગ-૨)")
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.runs[0].bold = True
+    # NEW HEADER FOR PAGE 3 (RIGHT SIDE)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    run = p.add_run(f"હોદ્દો: {designation}\n")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+    
+    run = p.add_run(f"મૂળ પગાર: {basic_pay}\n")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+    
+    run = p.add_run(f"Level: {pay_level}  |  Pay scale: {pay_scale}")
+    run.font.name = 'Arial Unicode MS'; run.font.size = Pt(11); run.bold = True
+
+    doc.add_paragraph() # Spacer before table
 
     # Columns: 11.KM, 12.Rate, 13.Total, 14.Days, 15.DA_Rate, 16.DA_Amt, 17.GrandTotal, 18.Purpose, 19.Remarks
     table_right = doc.add_table(rows=3, cols=9)
